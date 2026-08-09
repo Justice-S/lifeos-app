@@ -1,0 +1,1369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0d1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="LifeOS">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>LifeOS</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c232c; --line:#2a3038;
+  --text:#e6edf3; --dim:#8b949e; --accent:#4c9aff; --good:#3fb950;
+  --warn:#d29922; --bad:#f85149; --radius:14px;
+  --safe-top:env(safe-area-inset-top); --safe-bot:env(safe-area-inset-bottom);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg); color:var(--text); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  overscroll-behavior-y:none;
+}
+#app{padding:calc(var(--safe-top) + 8px) 16px calc(var(--safe-bot) + 84px);max-width:640px;margin:0 auto}
+h1{font-size:26px;margin:4px 0 2px;letter-spacing:-.5px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);margin:26px 0 10px;font-weight:600}
+.sub{color:var(--dim);font-size:14px;margin:0 0 4px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+.stat .n{font-size:24px;font-weight:650;letter-spacing:-.5px;margin-top:2px}
+.stat .l{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px}
+.muted{color:var(--dim)}
+.good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+.btn{background:var(--accent);color:#06121f;font-weight:650;border-radius:12px;padding:14px;width:100%;font-size:16px}
+.btn.sec{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+.btn.danger{background:transparent;color:var(--bad);border:1px solid var(--line)}
+.btn:active{opacity:.7}
+.quick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.quick button{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 12px;text-align:left}
+.quick .e{font-size:20px;display:block;margin-bottom:6px}
+.quick .t{font-weight:600;font-size:15px}
+.quick .d{font-size:12px;color:var(--dim)}
+.list{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--panel)}
+.item{display:flex;justify-content:space-between;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);font-size:15px}
+.item:last-child{border-bottom:none}
+.item .m{font-weight:550} .item .s{font-size:12px;color:var(--dim);margin-top:2px}
+.amt{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600}
+.bar{height:6px;background:var(--panel2);border-radius:4px;overflow:hidden;margin-top:8px}
+.bar>i{display:block;height:100%;background:var(--accent)}
+.nudge{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.35);color:#f0c674;
+  border-radius:12px;padding:11px 13px;margin-bottom:8px;font-size:14px}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(13,17,23,.93);
+  backdrop-filter:blur(16px);border-top:1px solid var(--line);padding-bottom:var(--safe-bot);z-index:50}
+nav button{flex:1;padding:10px 0 8px;font-size:11px;color:var(--dim);display:flex;flex-direction:column;
+  align-items:center;gap:3px}
+nav button.on{color:var(--accent)}
+nav .i{font-size:19px;line-height:1}
+.sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;align-items:flex-end}
+.sheet.on{display:flex}
+.sheet>div{background:var(--bg);width:100%;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;
+  padding:8px 16px calc(var(--safe-bot) + 24px);border-top:1px solid var(--line);max-width:640px;margin:0 auto}
+.handle{width:38px;height:4px;background:var(--line);border-radius:3px;margin:8px auto 14px}
+label{display:block;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;
+  margin:14px 0 6px;font-weight:600}
+input,select,textarea{width:100%;background:var(--panel);border:1px solid var(--line);color:var(--text);
+  border-radius:11px;padding:13px;font:inherit;appearance:none}
+input:focus,select,textarea:focus{outline:none;border-color:var(--accent)}
+textarea{min-height:88px;resize:vertical}
+.big{font-size:30px;font-weight:650;text-align:center;letter-spacing:-1px}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:8px 13px;font-size:14px}
+.chip.on{background:var(--accent);color:#06121f;border-color:var(--accent);font-weight:600}
+.pill{font-size:11px;padding:3px 8px;border-radius:20px;background:var(--panel2);color:var(--dim)}
+.status{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:6px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--dim)}
+.dot.ok{background:var(--good)} .dot.off{background:var(--warn)} .dot.err{background:var(--bad)}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(var(--safe-bot) + 76px);background:var(--panel);
+  border:1px solid var(--line);border-radius:12px;padding:13px 15px;z-index:200;opacity:0;
+  transform:translateY(12px);transition:.22s;pointer-events:none;font-size:14px;max-width:608px;margin:0 auto}
+.toast.on{opacity:1;transform:none}
+.empty{color:var(--dim);text-align:center;padding:30px 16px;font-size:14px}
+.hide{display:none!important}
+.bubble{border-radius:16px;padding:11px 14px;margin-bottom:8px;font-size:15px;max-width:88%;line-height:1.45}
+.bubble.me{background:var(--accent);color:#06121f;margin-left:auto;border-bottom-right-radius:5px}
+.bubble.ai{background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:5px}
+.tick{width:24px;height:24px;min-width:24px;border-radius:7px;border:1px solid var(--line);
+  background:var(--panel2);font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center}
+.tick.on{background:var(--accent);color:#06121f;border-color:var(--accent);font-weight:700}
+.sparkrow{display:flex;align-items:flex-end;gap:3px;height:44px;margin-top:10px}
+.sparkrow>i{flex:1;background:var(--accent);border-radius:2px 2px 0 0;min-height:2px;opacity:.85}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<nav id="nav">
+  <button data-v="today" class="on"><span class="i">☀️</span>Today</button>
+  <button data-v="talk"><span class="i">🎙️</span>Update</button>
+  <button data-v="money"><span class="i">💵</span>Money</button>
+  <button data-v="fitness"><span class="i">🏃</span>Fitness</button>
+  <button data-v="life"><span class="i">🎯</span>Life</button>
+  <button data-v="settings"><span class="i">⚙️</span>Settings</button>
+</nav>
+
+<div class="sheet" id="sheet"><div id="sheetBody"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+/* ============================ config & storage ============================ */
+
+const CFG_KEY = 'lifeos.cfg';
+const CACHE_KEY = 'lifeos.summary';
+const DEFAULTS = { owner:'', repo:'', branch:'main', token:'', vaultPath:'', vapid:'',
+  anthropicKey:'', model:'claude-haiku-4-5-20251001', weeklyModel:'claude-sonnet-4-6', depth:'gaps' };
+
+function cfg(){ try { return {...DEFAULTS, ...JSON.parse(localStorage.getItem(CFG_KEY)||'{}')}; }
+              catch(e){ return {...DEFAULTS}; } }
+function saveCfg(c){ localStorage.setItem(CFG_KEY, JSON.stringify({...cfg(), ...c})); }
+function configured(){ const c = cfg(); return !!(c.owner && c.repo && c.token); }
+
+/* vaultPath lets the vault live in a subfolder of the repo */
+function vpath(p){ const v = cfg().vaultPath.replace(/^\/|\/$/g,''); return v ? v + '/' + p : p; }
+
+const CATEGORIES = ['Groceries','Dining','Transport','Housing','Utilities','Health','Fitness',
+  'Subscriptions','Shopping','Insurance','Travel','Entertainment','Education','Transfers',
+  'Fees & Interest','Savings','Income','Uncategorized'];
+const ACTIVITIES = ['Lifting','Run','Walk','Cycle','Swim','Yoga','Climb','Sport','Mobility','Other'];
+const INTENSITY = ['easy','moderate','hard','max'];
+
+/* ============================ tiny helpers ============================ */
+
+const $ = s => document.querySelector(s);
+const el = (t,c,h) => { const n=document.createElement(t); if(c)n.className=c; if(h!=null)n.innerHTML=h; return n; };
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, m =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const money = n => '$' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const money0 = n => '$' + Math.round(Number(n)||0).toLocaleString('en-US');
+const todayISO = () => { const d=new Date(); return new Date(d.getTime()-d.getTimezoneOffset()*6e4).toISOString().slice(0,10); };
+const b64 = str => { const b=new TextEncoder().encode(str); let s=''; b.forEach(x=>s+=String.fromCharCode(x)); return btoa(s); };
+const unb64 = s => new TextDecoder().decode(Uint8Array.from(atob(String(s).replace(/\s/g,'')), c=>c.charCodeAt(0)));
+const safeName = s => String(s||'').replace(/[\\/:*?"<>|#^\[\]]/g,'').replace(/\s+/g,' ').trim().slice(0,60) || 'Entry';
+
+let toastTimer;
+function toast(msg, ms=2600){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('on'), ms);
+}
+
+/* ============================ GitHub API ============================ */
+
+async function gh(endpoint, opts={}){
+  const c = cfg();
+  if(!configured()) throw new Error('Not configured');
+  const res = await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}${endpoint}`, {
+    ...opts,
+    headers: {
+      'Authorization': 'Bearer ' + c.token,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(opts.body ? {'Content-Type':'application/json'} : {}),
+      ...(opts.headers||{})
+    }
+  });
+  if(res.status === 404) return null;
+  if(!res.ok){
+    const body = await res.text().catch(()=> '');
+    throw new Error(`GitHub ${res.status}: ${body.slice(0,200)}`);
+  }
+  return res.status === 204 ? true : res.json();
+}
+
+const enc = p => p.split('/').map(encodeURIComponent).join('/');
+
+async function getFile(path){
+  const r = await gh(`/contents/${enc(path)}?ref=${encodeURIComponent(cfg().branch)}`);
+  return r ? { text: unb64(r.content), sha: r.sha } : null;
+}
+
+async function putFile(path, text, message, sha, rawB64){
+  const body = { message, content: rawB64 || b64(text), branch: cfg().branch };
+  if(sha) body.sha = sha;
+  return gh(`/contents/${enc(path)}`, { method:'PUT', body: JSON.stringify(body) });
+}
+
+/* ============================ offline queue (IndexedDB) ============================ */
+
+let dbp;
+function db(){
+  if(dbp) return dbp;
+  dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('lifeos', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('ops', { keyPath:'id', autoIncrement:true });
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  return dbp;
+}
+async function tx(mode, fn){
+  const d = await db();
+  return new Promise((res, rej) => {
+    const t = d.transaction('ops', mode), s = t.objectStore('ops');
+    const out = fn(s);
+    t.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
+    t.onerror = () => rej(t.error);
+  });
+}
+const queueAdd  = op => tx('readwrite', s => s.add(op));
+const queueAll  = () => tx('readonly',  s => s.getAll());
+const queueDel  = id => tx('readwrite', s => s.delete(id));
+
+/* Every write goes through here: try now, queue if it fails. */
+async function write(path, text, message, opts={}){
+  if(!navigator.onLine){ await queueAdd({path, text, message, mode:opts.mode||'create'}); return 'queued'; }
+  try {
+    if(opts.mode === 'update'){
+      const cur = await getFile(path);
+      await putFile(path, text, message, cur ? cur.sha : undefined);
+    } else {
+      let p = path, n = 2;
+      while(await getFile(p)){ p = path.replace(/\.md$/, ` (${n}).md`); n++; if(n>20) break; }
+      await putFile(p, text, message);
+    }
+    return 'saved';
+  } catch(e){
+    await queueAdd({path, text, message, mode:opts.mode||'create'});
+    console.warn('queued after error', e);
+    return 'queued';
+  }
+}
+
+async function flushQueue(){
+  if(!navigator.onLine || !configured()) return 0;
+  const ops = await queueAll(); let n = 0;
+  for(const op of ops){
+    try {
+      if(op.mode === 'update'){
+        const cur = await getFile(op.path);
+        await putFile(op.path, op.text, op.message, cur ? cur.sha : undefined);
+      } else {
+        await putFile(op.path, op.text, op.message);
+      }
+      await queueDel(op.id); n++;
+    } catch(e){ console.warn('flush failed', e); break; }
+  }
+  return n;
+}
+
+/* ============================ summary data ============================ */
+
+let DATA = null;
+
+function cachedSummary(){
+  try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch(e){ return null; }
+}
+
+async function loadSummary(force){
+  if(!force){ const c = cachedSummary(); if(c){ DATA = c; } }
+  if(!configured() || !navigator.onLine) return DATA;
+  try {
+    const f = await getFile(vpath('90 System/summary.json'));
+    if(f){ DATA = JSON.parse(f.text); localStorage.setItem(CACHE_KEY, f.text); }
+  } catch(e){ console.warn('summary load failed', e); }
+  return DATA;
+}
+
+/* ============================ markdown builders ============================ */
+
+function fm(obj){
+  const lines = Object.entries(obj).map(([k,v]) => {
+    if(v === null || v === undefined || v === '') return `${k}: `;
+    if(Array.isArray(v)) return `${k}: [${v.join(', ')}]`;
+    const s = String(v);
+    return /[:#\[\]{}&*!|>'"%@`]/.test(s) ? `${k}: "${s.replace(/"/g,'\\"')}"` : `${k}: ${s}`;
+  });
+  return '---\n' + lines.join('\n') + '\n---\n';
+}
+
+function transactionNote(t){
+  const body = fm({
+    type:'transaction', date:t.date, amount:Number(t.amount).toFixed(2), direction:t.direction,
+    merchant:t.merchant, category:t.category, account:t.account, method:t.method||'',
+    source:'phone', external_id:`phone:${t.date}:${t.merchant}:${t.amount}`, tags:['finance','transaction']
+  });
+  const verb = t.direction === 'expense' ? 'spent' : 'received';
+  return body + `
+# ${t.merchant} — ${money(t.amount)}
+
+On **${t.date}** you ${verb} **${money(t.amount)}** at **${t.merchant}**.
+
+- Category: ${t.category}
+- Account: [[20 Finance/Accounts/${t.account}|${t.account}]]
+- Day: [[10 Daily/${t.date}|${t.date}]]
+
+## Notes
+
+${t.note || ''}
+`;
+}
+
+function workoutNote(w){
+  const body = fm({
+    type:'workout', date:w.date, activity:w.activity, duration_min:w.duration_min,
+    intensity:w.intensity, distance_mi:w.distance_mi||'', calories:'', avg_hr:'',
+    soreness:'', tags:['fitness','workout']
+  });
+  return body + `
+# ${w.activity} — ${w.duration_min} min
+
+**Activity:** ${w.activity}
+**Duration:** ${w.duration_min} minutes
+**Intensity:** ${w.intensity}
+**Day:** [[10 Daily/${w.date}|${w.date}]]
+
+## How it felt
+
+${w.note || ''}
+`;
+}
+
+function metricNote(m){
+  const body = fm({
+    type:'metric', date:m.date, weight_lbs:m.weight_lbs||'', body_fat_pct:m.body_fat_pct||'',
+    resting_hr:m.resting_hr||'', waist_in:m.waist_in||'', sleep_hours:'', tags:['fitness','metric']
+  });
+  return body + `\n# Body metrics — ${m.date}\n\nLogged from phone.\n`;
+}
+
+const DAILY_TEMPLATE = d => fm({
+  type:'daily', date:d, mood:'', energy:'', sleep_hours:'', weight_lbs:'', day_rating:'', tags:['daily']
+}) + `
+# ${new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}
+
+## Morning check-in
+
+**What matters most today:**
+- 
+
+## Journal
+
+## Wins
+
+## Open loops
+
+## Evening review
+
+**Rating out of 10:** 
+`;
+
+/* Set a frontmatter key in an existing markdown string. */
+function setFm(md, key, val){
+  if(val === '' || val === undefined || val === null) return md;
+  if(!md.startsWith('---')) return md;
+  const end = md.indexOf('\n---', 3);
+  if(end < 0) return md;
+  let head = md.slice(0, end), rest = md.slice(end);
+  const re = new RegExp('^' + key + ':.*$', 'm');
+  head = re.test(head) ? head.replace(re, `${key}: ${val}`) : head + `\n${key}: ${val}`;
+  return head + rest;
+}
+
+/* Append text under a "## Heading" section, creating the heading if absent. */
+function appendSection(md, heading, text){
+  if(!text) return md;
+  const re = new RegExp('^## ' + heading.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\s*$', 'm');
+  const m = md.match(re);
+  if(!m) return md.trimEnd() + `\n\n## ${heading}\n\n${text}\n`;
+  const start = m.index + m[0].length;
+  const nextIdx = md.slice(start).search(/^## /m);
+  const insertAt = nextIdx === -1 ? md.length : start + nextIdx;
+  /* drop the template's empty placeholder bullets so the section reads clean */
+  const before = md.slice(0, insertAt).replace(/\n[-*][ \t]*(\[[ xX]\][ \t]*)?(?=\n*$)/g, '').trimEnd();
+  return before + `\n\n${text}\n\n` + md.slice(insertAt);
+}
+
+/* ============================ actions ============================ */
+
+async function saveExpense(f){
+  const path = vpath(`20 Finance/Transactions/${f.date} ${safeName(f.merchant)} ${Number(f.amount).toFixed(2)}.md`);
+  const r = await write(path, transactionNote(f), `Log ${f.direction}: ${f.merchant} ${money(f.amount)}`);
+  bump(d => {
+    if(f.direction !== 'expense') return;
+    d.money.spent_today = +(d.money.spent_today + Number(f.amount)).toFixed(2);
+    d.money.spent_month = +(d.money.spent_month + Number(f.amount)).toFixed(2);
+    d.money.recent.unshift({date:f.date, amount:Number(f.amount), direction:f.direction,
+      merchant:f.merchant, category:f.category, account:f.account, path});
+  });
+  return r;
+}
+
+async function saveWorkout(f){
+  const path = vpath(`30 Fitness/Workouts/${f.date} ${safeName(f.activity)}.md`);
+  const r = await write(path, workoutNote(f), `Log workout: ${f.activity} ${f.duration_min}min`);
+  bump(d => {
+    d.fitness.sessions_7d++; d.fitness.minutes_7d += Number(f.duration_min)||0;
+    d.fitness.recent.unshift({date:f.date, activity:f.activity,
+      duration_min:Number(f.duration_min)||0, intensity:f.intensity, path});
+  });
+  return r;
+}
+
+async function saveMetrics(f){
+  const path = vpath(`30 Fitness/Metrics/${f.date}.md`);
+  const r = await write(path, metricNote(f), `Body metrics ${f.date}`, {mode:'update'});
+  bump(d => { if(f.weight_lbs) d.fitness.latest_weight = Number(f.weight_lbs); });
+  return r;
+}
+
+async function saveCheckin(f){
+  const path = vpath(`10 Daily/${f.date}.md`);
+  let md;
+  try {
+    const cur = await getFile(path);
+    md = cur ? cur.text : DAILY_TEMPLATE(f.date);
+  } catch(e){ md = DAILY_TEMPLATE(f.date); }
+  ['mood','energy','sleep_hours','weight_lbs','day_rating'].forEach(k => { md = setFm(md, k, f[k]); });
+  if(f.focus)   md = appendSection(md, 'Morning check-in', `**Focus:** ${f.focus}`);
+  if(f.journal) md = appendSection(md, 'Journal', f.journal);
+  if(f.win)     md = appendSection(md, 'Wins', `- ${f.win}`);
+  return write(path, md, `Check-in ${f.date}`, {mode:'update'});
+}
+
+async function saveGoalProgress(f){
+  const cur = await getFile(f.path);
+  if(!cur) throw new Error('Goal note not found');
+  let md = setFm(cur.text, 'current_value', f.value);
+  const row = `| ${f.date} | ${f.value} | ${f.note || ''} |`;
+  md = md.replace(/(\| Date \| Value \| Note \|\n\|---\|---\|---\|\n)/, `$1${row}\n`);
+  if(!md.includes(row)) md = appendSection(md, 'Progress log', row);
+  return write(f.path, md, `Goal progress: ${f.name} → ${f.value}`, {mode:'update'});
+}
+
+/* optimistic local update so the UI reacts before CI regenerates summary.json */
+function bump(fn){
+  if(!DATA) return;
+  try { fn(DATA); localStorage.setItem(CACHE_KEY, JSON.stringify(DATA)); } catch(e){}
+}
+
+
+/* ============================ Claude: dictate and parse ============================ */
+
+const PRICES = {
+  'claude-haiku-4-5-20251001': { in:1.00, out:5.00, cacheW:1.25, cacheR:0.10, label:'Haiku 4.5' },
+  'claude-sonnet-4-6':         { in:3.00, out:15.00, cacheW:3.75, cacheR:0.30, label:'Sonnet 4.6' }
+};
+
+const SYSTEM_PROMPT = `You turn a spoken daily update into structured operations for a personal
+markdown vault covering money, fitness, and life goals. The person dictates freely and out of order.
+Your job is to extract what actually happened, ask about what is missing, and never invent a number.
+
+Reply with a single JSON object and nothing else:
+
+{
+  "reply": "one or two sentences, warm and brief, no bullet points",
+  "operations": [ ... ],
+  "questions": [ "short question", ... ],
+  "done": false
+}
+
+Operation shapes. Every operation also carries a "summary" string of at most 10 words that will be
+shown to the person for approval.
+
+{"type":"expense","summary":"","amount":18.4,"merchant":"Joe's Coffee","category":"Dining","account":"Amex","date":"YYYY-MM-DD","note":""}
+{"type":"income","summary":"","amount":2140.55,"merchant":"Payroll","category":"Income","account":"Credit Union Checking","date":"YYYY-MM-DD","note":""}
+{"type":"workout","summary":"","activity":"Cycle","duration_min":48,"intensity":"easy|moderate|hard|max","distance_mi":null,"date":"YYYY-MM-DD","note":""}
+{"type":"metric","summary":"","date":"YYYY-MM-DD","weight_lbs":null,"body_fat_pct":null,"resting_hr":null,"waist_in":null}
+{"type":"checkin","summary":"","date":"YYYY-MM-DD","mood":null,"energy":null,"sleep_hours":null,"day_rating":null,"focus":"","journal":"","win":""}
+{"type":"goal_progress","summary":"","goal_id":0,"value":400,"note":""}
+{"type":"task_done","summary":"","task_id":3}
+{"type":"task_add","summary":"","text":"Call the credit union","date":"YYYY-MM-DD"}
+{"type":"achievement","summary":"","title":"First 10k run","domain":"fitness|finance|life","date":"YYYY-MM-DD","note":""}
+
+Rules that matter:
+
+- Never guess an amount, a duration, or which account a charge went on. If it is unclear, leave the
+  operation out and ask about it instead. A wrong number in someone's financial record is worse than
+  an extra question.
+- Use only category and account names from the context. If nothing fits, use "Uncategorized".
+- Resolve relative dates ("yesterday", "Friday") against today's date in the context.
+- Anything reflective, emotional, or narrative belongs in the checkin operation's "journal" field.
+  Do not turn a feeling into a task.
+- Put a genuine accomplishment in "win" on the checkin. Reserve the achievement operation for
+  milestones worth their own note.
+- Only reference goal_id and task_id values that appear in the context.
+- One checkin operation per day at most; merge everything reflective into it.
+- Set "done" to true when you have nothing further worth asking.
+- Questions must be answerable in a sentence. Never ask more than three at once.`;
+
+function buildContext(){
+  const d = DATA || {};
+  const life = d.life || {}, money = d.money || {}, fit = d.fitness || {};
+  const goals = (life.goals || []).filter(g => g.status === 'active')
+    .map((g, i) => ({ id:i, name:g.name, domain:g.domain, metric:g.metric,
+                      current:g.current, target:g.target, unit:g.unit }));
+  window.__goalIndex = (life.goals || []).filter(g => g.status === 'active');
+  const tasks = (life.open_tasks || []).slice(0, 25).map(t => ({ id:t.id, text:t.text }));
+  const depth = cfg().depth || 'gaps';
+  const depthLine = {
+    minimal: 'Ask only when the update is genuinely ambiguous. Do not raise anything the person did not mention.',
+    gaps:    'After parsing, ask about at most two or three things the person did not mention that look like gaps: a goal with no recent movement, an old open task, an uncategorized charge. Then set done.',
+    full:    'Work through the open goals and tasks over several turns until each has a current status. Two or three questions per turn, never more. Set done only when everything below has been addressed or explicitly skipped.'
+  }[depth];
+
+  return `Today is ${todayISO()}.
+
+Follow-up depth: ${depthLine}
+
+Accounts: ${(money.accounts || []).map(a => a.name).join(', ') || 'none yet'}
+Categories: ${CATEGORIES.join(', ')}
+Activities commonly logged: ${ACTIVITIES.join(', ')}
+
+Active goals:
+${goals.length ? goals.map(g => `  [${g.id}] ${g.name} (${g.domain}) — ${g.metric || 'no metric'}: ${g.current} of ${g.target} ${g.unit || ''}`).join('\n') : '  none'}
+
+Open tasks:
+${tasks.length ? tasks.map(t => `  [${t.id}] ${t.text}`).join('\n') : '  none'}
+
+Recent context: spent ${money.spent_month || 0} this month, ${fit.sessions_7d || 0} workouts in the
+last 7 days, latest weight ${fit.latest_weight || 'unknown'}.
+Flags: ${(d.nudges || []).map(n => n.text).join('; ') || 'none'}`;
+}
+
+let CHAT = [];
+let PENDING = [];
+let THINKING = false;
+
+function spend(){ try { return JSON.parse(localStorage.getItem('lifeos.spend') || '{"usd":0,"turns":0}'); }
+                  catch(e){ return {usd:0, turns:0}; } }
+function addSpend(usage, model){
+  const p = PRICES[model] || PRICES['claude-haiku-4-5-20251001'];
+  const u = usage || {};
+  const cost = ((u.input_tokens || 0) * p.in
+              + (u.output_tokens || 0) * p.out
+              + (u.cache_creation_input_tokens || 0) * p.cacheW
+              + (u.cache_read_input_tokens || 0) * p.cacheR) / 1e6;
+  const s = spend();
+  localStorage.setItem('lifeos.spend', JSON.stringify({ usd: s.usd + cost, turns: s.turns + 1 }));
+  return cost;
+}
+
+async function askClaude(userText){
+  const c = cfg();
+  if(!c.anthropicKey) throw new Error('Add your Claude API key in Settings');
+  const model = c.model || 'claude-haiku-4-5-20251001';
+  CHAT.push({ role:'user', content: userText });
+
+  const body = {
+    model,
+    max_tokens: 1600,
+    system: [
+      { type:'text', text: SYSTEM_PROMPT, cache_control:{ type:'ephemeral' } },
+      { type:'text', text: buildContext(), cache_control:{ type:'ephemeral' } }
+    ],
+    messages: [...CHAT, { role:'assistant', content:'{' }]
+  };
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers: {
+      'content-type':'application/json',
+      'x-api-key': c.anthropicKey,
+      'anthropic-version':'2023-06-01',
+      'anthropic-dangerous-direct-browser-access':'true'
+    },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){
+    const t = await res.text().catch(()=> '');
+    throw new Error(`Claude ${res.status}: ${t.slice(0,160)}`);
+  }
+  const json = await res.json();
+  const raw = '{' + (json.content || []).map(b => b.text || '').join('');
+  addSpend(json.usage, model);
+
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch(e){
+    const m = raw.match(/\{[\s\S]*\}/);
+    if(!m) throw new Error('Could not read the response');
+    parsed = JSON.parse(m[0]);
+  }
+  CHAT.push({ role:'assistant', content: raw });
+  return parsed;
+}
+
+/* ---- executing approved operations ---- */
+
+async function runOp(op){
+  const date = op.date || todayISO();
+  switch(op.type){
+    case 'expense':
+    case 'income':
+      return saveExpense({ amount: Number(op.amount), merchant: op.merchant || 'Unknown',
+        category: op.category || 'Uncategorized', account: op.account || '',
+        direction: op.type === 'income' ? 'income' : 'expense', date, note: op.note || '' });
+    case 'workout':
+      return saveWorkout({ activity: op.activity || 'Workout', duration_min: Number(op.duration_min) || 0,
+        intensity: op.intensity || 'moderate', distance_mi: op.distance_mi || '', date, note: op.note || '' });
+    case 'metric':
+      return saveMetrics({ date, weight_lbs: op.weight_lbs || '', body_fat_pct: op.body_fat_pct || '',
+        resting_hr: op.resting_hr || '', waist_in: op.waist_in || '' });
+    case 'checkin':
+      return saveCheckin({ date, mood: op.mood ?? '', energy: op.energy ?? '',
+        sleep_hours: op.sleep_hours ?? '', day_rating: op.day_rating ?? '',
+        focus: op.focus || '', journal: op.journal || '', win: op.win || '' });
+    case 'goal_progress': {
+      const g = (window.__goalIndex || [])[op.goal_id];
+      if(!g) throw new Error('Unknown goal');
+      return saveGoalProgress({ path:g.path, name:g.name, value:op.value, date, note: op.note || '' });
+    }
+    case 'task_done':  return completeTask(op.task_id);
+    case 'task_add':   return addTask(op.text, date);
+    case 'achievement':return saveAchievement({ title:op.title, domain:op.domain || 'life', date, note:op.note || '' });
+    default: throw new Error('Unknown operation: ' + op.type);
+  }
+}
+
+async function completeTask(id){
+  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  if(!t) throw new Error('Task not found');
+  const cur = await getFile(vpath(t.path));
+  if(!cur) throw new Error('Task file missing');
+  const lines = cur.text.split('\n');
+  let hit = -1;
+  if(lines[t.line] && lines[t.line].includes(t.text)) hit = t.line;
+  else hit = lines.findIndex(l => /^\s*[-*]\s*\[ \]/.test(l) && l.includes(t.text));
+  if(hit < 0) throw new Error('Could not find that task line');
+  lines[hit] = lines[hit].replace(/\[ \]/, '[x]');
+  return write(vpath(t.path), lines.join('\n'), `Done: ${t.text.slice(0,50)}`, { mode:'update' });
+}
+
+async function addTask(text, date){
+  const path = vpath(`10 Daily/${date}.md`);
+  let md;
+  try { const cur = await getFile(path); md = cur ? cur.text : DAILY_TEMPLATE(date); }
+  catch(e){ md = DAILY_TEMPLATE(date); }
+  md = appendSection(md, 'Open loops', `- [ ] ${text}`);
+  return write(path, md, `Add task: ${text.slice(0,50)}`, { mode:'update' });
+}
+
+async function saveAchievement(a){
+  const path = vpath(`40 Life/Achievements/${a.date} ${safeName(a.title)}.md`);
+  const body = fm({ type:'achievement', date:a.date, domain:a.domain, tags:['achievement'] })
+    + `\n# ${a.title}\n\n${a.note || ''}\n\nLogged on [[10 Daily/${a.date}|${a.date}]].\n`;
+  return write(path, body, `Achievement: ${a.title}`);
+}
+
+/* ---- talk view ---- */
+
+function opLabel(op){
+  if(op.summary) return op.summary;
+  switch(op.type){
+    case 'expense': return `${money(op.amount)} at ${op.merchant}`;
+    case 'income':  return `${money(op.amount)} from ${op.merchant}`;
+    case 'workout': return `${op.activity}, ${op.duration_min} min`;
+    case 'metric':  return `Body metrics`;
+    case 'checkin': return `Daily check-in`;
+    case 'goal_progress': return `Goal → ${op.value}`;
+    case 'task_done': return `Complete a task`;
+    case 'task_add': return `New task: ${op.text}`;
+    case 'achievement': return `Achievement: ${op.title}`;
+    default: return op.type;
+  }
+}
+const OP_ICON = { expense:'💵', income:'💰', workout:'🏃', metric:'⚖️', checkin:'📝',
+                  goal_progress:'🎯', task_done:'✅', task_add:'📌', achievement:'🏆' };
+
+function viewTalk(){
+  const c = cfg();
+  let h = header('Update', 'Say what happened. Punctuation optional.');
+  if(!configured()) return h + needsSetup();
+  if(!c.anthropicKey){
+    return h + `<div class="card"><b>One more key</b>
+      <p class="sub" style="margin-top:8px">Parsing a spoken update needs a Claude API key. It sits on
+      this device next to your GitHub token. Around a dollar a month at daily use.</p>
+      <button class="btn" onclick="go('settings')">Add it in settings</button></div>`;
+  }
+
+  h += `<div id="thread">`;
+  if(!CHAT.length){
+    h += `<div class="card"><p class="sub" style="margin:0">Tap the text box, hit the mic key on your
+      keyboard, and talk. Something like: <i>"Ran four miles this morning, felt good. Spent about
+      sixty at the grocery store on the Amex. Put four hundred into the emergency fund. Slept seven
+      hours, rating the day an eight."</i></p></div>`;
+  }
+  CHAT.forEach(m => {
+    if(m.role === 'user'){
+      h += `<div class="bubble me">${esc(m.content)}</div>`;
+    } else {
+      let reply = '';
+      try { reply = JSON.parse(m.content).reply || ''; } catch(e){}
+      if(reply) h += `<div class="bubble ai">${esc(reply)}</div>`;
+    }
+  });
+  if(THINKING) h += `<div class="bubble ai muted">Reading that…</div>`;
+  h += `</div>`;
+
+  if(PENDING.length){
+    h += `<h2>Ready to write</h2><div class="list">` + PENDING.map((op, i) =>
+      `<div class="item">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <button class="tick ${op._off?'':'on'}" onclick="toggleOp(${i})" aria-label="include">${op._off?'':'✓'}</button>
+          <div><div class="m ${op._off?'muted':''}">${OP_ICON[op.type]||'•'} ${esc(opLabel(op))}</div>
+          <div class="s">${esc(opDetail(op))}</div></div>
+        </div></div>`).join('') + `</div>
+      <button class="btn" style="margin-top:10px" onclick="commitOps(this)">Write ${PENDING.filter(o=>!o._off).length} to the vault</button>
+      <button class="btn sec" style="margin-top:8px" onclick="PENDING=[];render()">Discard these</button>`;
+  }
+
+  const qs = window.__questions || [];
+  if(qs.length){
+    h += `<h2>It wants to know</h2><div class="chips">` + qs.map(q =>
+      `<button class="chip" onclick="quickAsk(${JSON.stringify(JSON.stringify(q))})">${esc(q)}</button>`
+    ).join('') + `</div>`;
+  }
+
+  h += `<label>Your update</label>
+    <textarea id="t_input" placeholder="Talk or type. Mic key on the keyboard." style="min-height:110px"></textarea>
+    <button class="btn" style="margin-top:10px" onclick="sendUpdate(this)" ${THINKING?'disabled':''}>Send</button>
+    <div class="row" style="margin-top:14px">
+      <span class="sub">${PRICES[c.model||'claude-haiku-4-5-20251001'].label} · ${CHAT.length? Math.ceil(CHAT.length/2)+' turns this session':'new session'}</span>
+      <span class="sub">$${spend().usd.toFixed(3)} all time</span>
+    </div>
+    ${CHAT.length? `<button class="btn sec" style="margin-top:10px" onclick="newSession()">Start a fresh update</button>`:''}`;
+  return h;
+}
+
+function opDetail(op){
+  const bits = [];
+  if(op.date) bits.push(op.date);
+  if(op.category) bits.push(op.category);
+  if(op.account) bits.push(op.account);
+  if(op.intensity) bits.push(op.intensity);
+  if(op.journal) bits.push('journal entry');
+  if(op.win) bits.push('win recorded');
+  if(op.note) bits.push(op.note.slice(0, 40));
+  return bits.join(' · ');
+}
+
+function toggleOp(i){ PENDING[i]._off = !PENDING[i]._off; render(); }
+
+function quickAsk(json){
+  const q = JSON.parse(json);
+  const box = document.getElementById('t_input');
+  if(box){ box.value = (box.value ? box.value + ' ' : '') + q + ' — '; box.focus(); }
+}
+
+function newSession(){ CHAT = []; PENDING = []; window.__questions = []; render(); }
+
+async function sendUpdate(btn){
+  const text = val('t_input');
+  if(!text) return toast('Say something first');
+  THINKING = true; render();
+  try {
+    const out = await askClaude(text);
+    PENDING = (out.operations || []).map(o => ({ ...o, _off:false }));
+    window.__questions = out.done ? [] : (out.questions || []);
+  } catch(e){
+    CHAT.pop();
+    toast(e.message);
+  }
+  THINKING = false; render();
+}
+
+async function commitOps(btn){
+  const live = PENDING.filter(o => !o._off);
+  if(!live.length) return toast('Nothing selected');
+  btn.disabled = true;
+  let ok = 0, failed = [];
+  for(let i = 0; i < live.length; i++){
+    btn.textContent = `Writing ${i+1} of ${live.length}…`;
+    try { await runOp(live[i]); ok++; }
+    catch(e){ failed.push(opLabel(live[i]) + ': ' + e.message); }
+  }
+  PENDING = [];
+  render();
+  toast(failed.length ? `${ok} written, ${failed.length} failed — ${failed[0]}`
+                      : `${ok} written to your vault`);
+  setTimeout(() => refresh(true), 1500);
+}
+
+/* ============================ paystub upload ============================ */
+
+/* Payroll providers offer no personal API — Paylocity, ADP and the rest gate it
+   behind a partner program. So the phone becomes the bridge: pick the PDF you
+   downloaded, commit it to the vault, and a GitHub Action parses it and deletes it. */
+
+function bytesToB64(buf){
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  const CHUNK = 0x8000;
+  for(let i = 0; i < bytes.length; i += CHUNK){
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function pickPaystub(){
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/pdf,.pdf';
+  input.onchange = () => { if(input.files && input.files[0]) uploadPaystub(input.files[0]); };
+  input.click();
+}
+
+async function uploadPaystub(file){
+  if(!configured()) return toast('Connect your vault first');
+  if(file.size > 8 * 1024 * 1024) return toast('That file is over 8 MB — is it really a paystub?');
+  toast('Uploading ' + file.name + '…', 6000);
+  try {
+    const buf = await file.arrayBuffer();
+    const clean = file.name.replace(/[^A-Za-z0-9._-]/g, '_');
+    const path = vpath(`20 Finance/Income/inbox/${todayISO()}-${clean}`);
+    await putFile(path, null, `Upload paystub ${clean}`, undefined, bytesToB64(buf));
+    toast('Uploaded. It will be parsed and the PDF deleted within a minute.', 5000);
+    setTimeout(() => refresh(true), 45000);
+  } catch(e){
+    toast('Upload failed: ' + e.message);
+  }
+}
+
+/* ============================ views ============================ */
+
+let view = 'today';
+
+function header(title, subtitle){
+  const online = navigator.onLine;
+  return `<div class="row"><div><h1>${esc(title)}</h1><p class="sub">${esc(subtitle||'')}</p></div>
+    <div class="status"><span class="dot ${configured() ? (online?'ok':'off') : 'err'}"></span>
+    ${configured() ? (online?'Synced':'Offline') : 'Setup'}</div></div>`;
+}
+
+function nudges(){
+  if(!DATA || !DATA.nudges || !DATA.nudges.length) return '';
+  return DATA.nudges.map(n => `<div class="nudge">${esc(n.text)}</div>`).join('');
+}
+
+function needsSetup(){
+  return `<div class="card"><b>Connect your vault</b>
+    <p class="sub" style="margin-top:8px">This app reads and writes markdown in your private GitHub
+    repo. Open Settings and paste in your repo details and a token.</p>
+    <button class="btn" onclick="go('settings')">Open settings</button></div>`;
+}
+
+function viewToday(){
+  const d = DATA;
+  const day = new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+  let h = header('Today', day);
+  if(!configured()) return h + needsSetup();
+  h += nudges();
+  h += `<button class="btn" style="margin:6px 0 12px" onclick="go('talk')">🎙️ Dictate today's update</button>`;
+  h += `<div class="quick">
+    <button onclick="sheetExpense()"><span class="e">💵</span><span class="t">Log expense</span><span class="d">Tap, type, done</span></button>
+    <button onclick="sheetWorkout()"><span class="e">🏃</span><span class="t">Log workout</span><span class="d">Activity + minutes</span></button>
+    <button onclick="sheetCheckin()"><span class="e">📝</span><span class="t">Check in</span><span class="d">Mood, sleep, journal</span></button>
+    <button onclick="sheetMetrics()"><span class="e">⚖️</span><span class="t">Body metrics</span><span class="d">Weight, HR, waist</span></button>
+  </div>`;
+  if(!d) return h + `<div class="empty">No data yet. Pull down or tap refresh in Settings.</div>`;
+  h += `<div class="grid">
+    <div class="stat"><div class="l">Spent today</div><div class="n">${money0(d.money.spent_today)}</div></div>
+    <div class="stat"><div class="l">This month</div><div class="n">${money0(d.money.spent_month)}</div></div>
+    <div class="stat"><div class="l">Workouts, 7d</div><div class="n">${d.fitness.sessions_7d}</div></div>
+    <div class="stat"><div class="l">Net worth</div><div class="n">${money0(d.money.net_worth)}</div></div>
+  </div>`;
+  const recent = (d.money.recent||[]).slice(0,5);
+  if(recent.length){
+    h += `<h2>Latest transactions</h2><div class="list">` + recent.map(t =>
+      `<div class="item"><div><div class="m">${esc(t.merchant)}</div>
+       <div class="s">${esc(t.category)} · ${esc(t.date)}</div></div>
+       <div class="amt ${t.direction==='income'?'good':''}">${t.direction==='income'?'+':''}${money(t.amount)}</div></div>`
+    ).join('') + `</div>`;
+  }
+  const wr = (d.fitness.recent||[]).slice(0,4);
+  if(wr.length){
+    h += `<h2>Recent sessions</h2><div class="list">` + wr.map(w =>
+      `<div class="item"><div><div class="m">${esc(w.activity)}</div>
+       <div class="s">${esc(w.date)} · ${esc(w.intensity||'')}</div></div>
+       <div class="amt">${w.duration_min}m</div></div>`).join('') + `</div>`;
+  }
+  h += `<h2>Generated</h2><p class="sub">Vault summary from ${esc(d.generated_at)}.</p>`;
+  return h;
+}
+
+function paycheckCard(m){
+  const p = m.paycheck_profile, last = m.last_paycheck;
+  let h = `<h2>Paycheck</h2><div class="card">`;
+  if(!p || !p.expected_net){
+    h += `<p class="sub" style="margin:0 0 10px">No baseline yet. Upload one paystub and every
+      future deposit gets checked against it automatically.</p>`;
+  } else {
+    h += `<div class="row"><span class="sub">Baseline net</span><span class="amt">${money(p.expected_net)}</span></div>`;
+    if(last){
+      const off = last.variable_pay > 0 ? 'above' : last.shortfall > 0 ? 'below' : 'on';
+      const amt = last.variable_pay > 0 ? last.variable_pay : last.shortfall;
+      h += `<div class="row" style="margin-top:8px"><span class="sub">Last, ${esc(last.date)}</span>
+        <span class="amt ${off==='below'?'bad':off==='above'?'good':''}">${money(last.net)}</span></div>`;
+      if(off !== 'on'){
+        h += `<p class="sub" style="margin:8px 0 0">${money(amt)} ${off} baseline${
+          off==='above' ? ' — recorded as bonus or commission.' : ' — worth checking the stub.'}</p>`;
+      }
+    }
+    if(m.variable_pay_ytd > 0){
+      h += `<div class="row" style="margin-top:8px"><span class="sub">Variable pay this year</span>
+        <span class="amt good">${money(m.variable_pay_ytd)}</span></div>`;
+    }
+  }
+  const short = (m.payroll_flags||[]).filter(f => f.kind === 'shortfall');
+  if(short.length){
+    h += `<div class="nudge" style="margin-top:10px">${short.length} paycheck${short.length>1?'s':''}
+      came in under baseline. Upload the stub so the breakdown is right.</div>`;
+  }
+  h += `<button class="btn ${short.length||!p||!p.expected_net?'':'sec'}" style="margin-top:10px"
+    onclick="pickPaystub()">Upload a paystub</button>
+    <p class="sub" style="margin-top:8px">Download it from Paylocity first, then pick it here. The PDF
+    is parsed and deleted; only the numbers are kept.</p></div>`;
+  return h;
+}
+
+function viewMoney(){
+  const d = DATA;
+  let h = header('Money', d ? `${d.money.transaction_count} transactions tracked` : '');
+  if(!configured()) return h + needsSetup();
+  if(!d) return h + `<div class="empty">No summary yet.</div>`;
+  const m = d.money;
+  const delta = m.spent_prev_month ? ((m.spent_month - m.spent_prev_month)/m.spent_prev_month*100) : null;
+  h += `<div class="grid">
+    <div class="stat"><div class="l">This month</div><div class="n">${money0(m.spent_month)}</div>
+      ${delta===null?'':`<div class="s ${delta>0?'bad':'good'}" style="font-size:12px;margin-top:4px">
+      ${delta>0?'▲':'▼'} ${Math.abs(delta).toFixed(0)}% vs last month</div>`}</div>
+    <div class="stat"><div class="l">Income, month</div><div class="n good">${money0(m.income_month)}</div></div>
+    <div class="stat"><div class="l">Assets</div><div class="n">${money0(m.assets)}</div></div>
+    <div class="stat"><div class="l">Debts</div><div class="n ${m.debts>0?'bad':''}">${money0(m.debts)}</div></div>
+  </div>`;
+  h += `<button class="btn" style="margin:12px 0" onclick="sheetExpense()">Log an expense</button>`;
+  if(m.categories && m.categories.length){
+    const max = m.categories[0].spent || 1;
+    h += `<h2>Where it went this month</h2><div class="card">` + m.categories.map(c =>
+      `<div style="margin-bottom:12px"><div class="row"><span>${esc(c.category)}</span>
+       <span class="amt">${money(c.spent)}</span></div>
+       <div class="bar"><i style="width:${Math.max(2,(c.spent/max)*100).toFixed(1)}%"></i></div></div>`
+    ).join('') + `</div>`;
+  }
+  if(m.accounts && m.accounts.length){
+    h += `<h2>Accounts</h2><div class="list">` + m.accounts.map(a =>
+      `<div class="item"><div><div class="m">${esc(a.name)}</div>
+       <div class="s">${esc(a.institution||a.kind)} · ${a.last_synced ? 'synced '+esc(a.last_synced) : 'never synced'}</div></div>
+       <div class="amt ${a.kind==='credit'||a.kind==='loan'?'bad':''}">${money(a.balance)}</div></div>`
+    ).join('') + `</div>`;
+  }
+  h += paycheckCard(m);
+  const gs = (d.life.goals||[]).filter(g => g.domain==='finance' && g.status==='active');
+  if(gs.length){
+    h += `<h2>Money goals</h2>` + gs.map(g => goalCard(g)).join('');
+  }
+  if(m.recent && m.recent.length){
+    h += `<h2>All recent</h2><div class="list">` + m.recent.slice(0,30).map(t =>
+      `<div class="item"><div><div class="m">${esc(t.merchant)}</div>
+       <div class="s">${esc(t.category)} · ${esc(t.account||'')} · ${esc(t.date)}</div></div>
+       <div class="amt ${t.direction==='income'?'good':''}">${t.direction==='income'?'+':''}${money(t.amount)}</div></div>`
+    ).join('') + `</div>`;
+  }
+  return h;
+}
+
+function viewFitness(){
+  const d = DATA;
+  let h = header('Fitness', d ? `${d.fitness.sessions_30d} sessions in 30 days` : '');
+  if(!configured()) return h + needsSetup();
+  if(!d) return h + `<div class="empty">No summary yet.</div>`;
+  const f = d.fitness;
+  h += `<div class="grid">
+    <div class="stat"><div class="l">Sessions, 7d</div><div class="n">${f.sessions_7d}</div></div>
+    <div class="stat"><div class="l">Minutes, 7d</div><div class="n">${f.minutes_7d}</div></div>
+    <div class="stat"><div class="l">Day streak</div><div class="n">${f.streak_days}</div></div>
+    <div class="stat"><div class="l">Weight</div><div class="n">${f.latest_weight ? f.latest_weight+' lb' : '—'}</div></div>
+  </div>`;
+  h += `<button class="btn" style="margin:12px 0" onclick="sheetWorkout()">Log a workout</button>`;
+  if(f.weekly && f.weekly.length){
+    const max = Math.max(...f.weekly.map(w=>w.sessions), 1);
+    h += `<h2>Sessions per week</h2><div class="card">
+      <div class="sparkrow">${[...f.weekly].reverse().map(w =>
+        `<i style="height:${Math.max(6,(w.sessions/max)*100)}%" title="${w.week}: ${w.sessions}"></i>`).join('')}</div>
+      <p class="sub" style="margin-top:8px">Last ${f.weekly.length} weeks · best week ${max} sessions</p></div>`;
+  }
+  if(f.activities && f.activities.length){
+    h += `<h2>Last 90 days</h2><div class="list">` + f.activities.map(a =>
+      `<div class="item"><div><div class="m">${esc(a.activity)}</div>
+       <div class="s">${a.minutes} minutes total</div></div>
+       <div class="amt">${a.sessions}×</div></div>`).join('') + `</div>`;
+  }
+  const gs = (d.life.goals||[]).filter(g => g.domain==='fitness' && g.status==='active');
+  if(gs.length) h += `<h2>Fitness goals</h2>` + gs.map(g => goalCard(g)).join('');
+  if(f.recent && f.recent.length){
+    h += `<h2>Recent sessions</h2><div class="list">` + f.recent.slice(0,20).map(w =>
+      `<div class="item"><div><div class="m">${esc(w.activity)}</div>
+       <div class="s">${esc(w.date)} · ${esc(w.intensity||'')}</div></div>
+       <div class="amt">${w.duration_min}m</div></div>`).join('') + `</div>`;
+  }
+  if(f.metrics && f.metrics.length){
+    h += `<h2>Body metrics</h2><div class="list">` + f.metrics.slice(0,10).map(m =>
+      `<div class="item"><div><div class="m">${esc(m.date)}</div>
+       <div class="s">${[m.body_fat_pct?m.body_fat_pct+'% bf':'', m.resting_hr?m.resting_hr+' rhr':'',
+         m.waist_in?m.waist_in+'" waist':''].filter(Boolean).join(' · ')||'—'}</div></div>
+       <div class="amt">${m.weight_lbs? m.weight_lbs+' lb' : '—'}</div></div>`).join('') + `</div>`;
+  }
+  return h;
+}
+
+let GOALREFS = [];
+function goalRef(g){ GOALREFS.push(g); return GOALREFS.length - 1; }
+
+function goalCard(g){
+  const pct = g.percent == null ? null : Math.max(0, Math.min(100, g.percent));
+  return `<div class="card">
+    <div class="row"><b>${esc(g.name)}</b><span class="pill">${esc(g.domain)}</span></div>
+    <p class="sub" style="margin:6px 0 0">${esc(g.metric||'')}${g.target_date? ' · by '+esc(g.target_date):''}</p>
+    ${pct===null?'':`<div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="row" style="margin-top:6px"><span class="sub">${g.current} / ${g.target} ${esc(g.unit||'')}</span>
+      <span class="sub">${pct.toFixed(0)}%</span></div>`}
+    <button class="btn sec" style="margin-top:10px" onclick="sheetGoal(${goalRef(g)})">Update progress</button>
+  </div>`;
+}
+
+function viewLife(){
+  const d = DATA;
+  let h = header('Life', d ? `${d.life.active_goals} active goals` : '');
+  if(!configured()) return h + needsSetup();
+  if(!d) return h + `<div class="empty">No summary yet.</div>`;
+  h += `<button class="btn" style="margin:8px 0 4px" onclick="sheetCheckin()">Daily check-in</button>`;
+  const active = (d.life.goals||[]).filter(g => g.status === 'active');
+  h += `<h2>Goals</h2>` + (active.length ? active.map(g => goalCard(g)).join('')
+       : `<div class="empty">No active goals. Add one in Obsidian and it shows up here.</div>`);
+  if(d.life.days && d.life.days.length){
+    h += `<h2>Recent days</h2><div class="list">` + d.life.days.slice(0,14).map(x =>
+      `<div class="item"><div><div class="m">${esc(x.date)}</div>
+       <div class="s">${[x.mood?'mood '+x.mood:'', x.sleep_hours?x.sleep_hours+'h sleep':''].filter(Boolean).join(' · ')||'—'}</div></div>
+       <div class="amt">${x.day_rating? x.day_rating+'/10' : '—'}</div></div>`).join('') + `</div>`;
+  }
+  if(d.life.achievements && d.life.achievements.length){
+    h += `<h2>Achievements</h2><div class="list">` + d.life.achievements.map(a =>
+      `<div class="item"><div><div class="m">${esc(a.name)}</div>
+       <div class="s">${esc(a.domain)}</div></div><div class="amt">${esc(a.date)}</div></div>`).join('') + `</div>`;
+  }
+  return h;
+}
+
+function viewSettings(){
+  const c = cfg();
+  return header('Settings','Everything is stored on this device only') + `
+  <div class="card">
+    <label>GitHub username</label><input id="s_owner" value="${esc(c.owner)}" autocapitalize="off" autocorrect="off">
+    <label>Vault repo name</label><input id="s_repo" value="${esc(c.repo)}" autocapitalize="off" autocorrect="off" placeholder="lifeos-vault">
+    <label>Branch</label><input id="s_branch" value="${esc(c.branch)}" autocapitalize="off">
+    <label>Folder inside repo (leave blank if vault is at the root)</label>
+    <input id="s_vault" value="${esc(c.vaultPath)}" autocapitalize="off" placeholder="e.g. LifeOS">
+    <label>Access token</label><input id="s_token" type="password" value="${esc(c.token)}" autocapitalize="off" autocorrect="off">
+    <p class="sub" style="margin-top:8px">Fine-grained token, this repo only, Contents: read and write.
+    It never leaves your phone.</p>
+    <button class="btn" style="margin-top:12px" onclick="saveSettings()">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="testConn()">Test connection</button>
+  </div>
+
+  <h2>Data</h2>
+  <div class="card">
+    <button class="btn sec" onclick="refresh(true)">Refresh from vault</button>
+    <button class="btn sec" style="margin-top:8px" onclick="syncNow()">Push queued entries</button>
+    <p class="sub" id="queueInfo" style="margin-top:10px"></p>
+  </div>
+
+  <h2>Voice updates</h2>
+  <div class="card">
+    <label>Claude API key</label>
+    <input id="s_akey" type="password" value="${esc(c.anthropicKey)}" autocapitalize="off" autocorrect="off" placeholder="sk-ant-...">
+    <label>Model</label>
+    <select id="s_model">
+      <option value="claude-haiku-4-5-20251001" ${c.model==='claude-haiku-4-5-20251001'?'selected':''}>Haiku 4.5 — fast, pennies a day</option>
+      <option value="claude-sonnet-4-6" ${c.model==='claude-sonnet-4-6'?'selected':''}>Sonnet 4.6 — sharper on rambling updates, 3× the cost</option>
+    </select>
+    <label>How much it asks back</label>
+    <select id="s_depth">
+      <option value="minimal" ${c.depth==='minimal'?'selected':''}>Only clarify what I said — ~$0.17/mo</option>
+      <option value="gaps" ${c.depth==='gaps'?'selected':''}>Ask about gaps it notices — ~$0.37/mo</option>
+      <option value="full" ${c.depth==='full'?'selected':''}>Full check-in on every goal — ~$0.88/mo</option>
+    </select>
+    <button class="btn" style="margin-top:12px" onclick="saveSettings()">Save</button>
+    <div class="row" style="margin-top:12px">
+      <span class="sub">Spent so far</span>
+      <span class="sub">$${spend().usd.toFixed(3)} over ${spend().turns} turns</span>
+    </div>
+    <button class="btn sec" style="margin-top:8px" onclick="resetSpend()">Reset the counter</button>
+    <p class="sub" style="margin-top:10px">Estimates assume Haiku and one session a day; Sonnet is
+    roughly three times each figure. Set a monthly spend limit on your Anthropic console so a runaway
+    session can't surprise you. The key stays on this device.</p>
+  </div>
+
+  <h2>Notifications</h2>
+  <div class="card">
+    <label>VAPID public key</label>
+    <input id="s_vapid" value="${esc(c.vapid)}" autocapitalize="off" autocorrect="off" placeholder="BN...">
+    <p class="sub" style="margin-top:8px">From the key pair you generate during setup. Paste the
+    <b>public</b> half here; the private half stays a GitHub secret.</p>
+    <button class="btn sec" style="margin-top:10px" onclick="enablePush()">Enable notifications</button>
+    <p class="sub" style="margin-top:10px">On iPhone this only works once the app is installed to your
+    home screen from Safari's Share menu.</p>
+  </div>
+
+  <h2>About</h2>
+  <div class="card">
+    <p class="sub" style="margin:0">LifeOS writes plain markdown to your own repo. Nothing is sent
+    anywhere else — no analytics, no server, no account. Delete the app and your data is still yours.</p>
+    <button class="btn danger" style="margin-top:12px" onclick="wipe()">Clear settings on this device</button>
+  </div>`;
+}
+
+const VIEWS = { today:viewToday, talk:viewTalk, money:viewMoney, fitness:viewFitness, life:viewLife, settings:viewSettings };
+
+function render(){
+  GOALREFS = [];
+  $('#app').innerHTML = (VIEWS[view] || viewToday)();
+  document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
+  window.scrollTo(0,0);
+  if(view === 'settings') queueAll().then(q =>
+    { const n = $('#queueInfo'); if(n) n.textContent = q.length ? `${q.length} entries waiting to upload.` : 'Nothing waiting to upload.'; });
+}
+function go(v){ view = v; render(); }
+
+/* ============================ sheets ============================ */
+
+function openSheet(html){ $('#sheetBody').innerHTML = `<div class="handle"></div>` + html; $('#sheet').classList.add('on'); }
+function closeSheet(){ $('#sheet').classList.remove('on'); }
+$('#sheet').addEventListener('click', e => { if(e.target.id === 'sheet') closeSheet(); });
+
+function chipRow(id, opts, sel){
+  return `<div class="chips" id="${id}">` + opts.map(o =>
+    `<button type="button" class="chip ${o===sel?'on':''}" data-v="${esc(o)}"
+      onclick="pick('${id}', this)">${esc(o)}</button>`).join('') + `</div>`;
+}
+function pick(id, btn){
+  document.querySelectorAll('#'+id+' .chip').forEach(c => c.classList.remove('on'));
+  btn.classList.add('on');
+}
+const picked = id => { const n = document.querySelector('#'+id+' .chip.on'); return n ? n.dataset.v : ''; };
+const val = id => { const n = document.getElementById(id); return n ? n.value.trim() : ''; };
+
+function sheetExpense(){
+  const accounts = (DATA && DATA.money.accounts || []).map(a => a.name);
+  openSheet(`<h1 style="font-size:22px">Log expense</h1>
+    <label>Amount</label><input id="f_amt" class="big" type="text" inputmode="decimal" placeholder="0.00">
+    <label>Merchant</label><input id="f_mer" placeholder="Where?" autocapitalize="words">
+    <label>Category</label>${chipRow('f_cat', CATEGORIES, 'Uncategorized')}
+    <label>Account</label>
+    <select id="f_acc">${(accounts.length?accounts:['Credit Union Checking','Amex','Discover'])
+      .map(a=>`<option>${esc(a)}</option>`).join('')}</select>
+    <label>Direction</label>${chipRow('f_dir', ['expense','income'], 'expense')}
+    <label>Date</label><input id="f_date" type="date" value="${todayISO()}">
+    <label>Note (optional)</label><input id="f_note" placeholder="What was it for?">
+    <button class="btn" style="margin-top:18px" onclick="submitExpense(this)">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+  setTimeout(()=> { const a = document.getElementById('f_amt'); if(a) a.focus(); }, 250);
+}
+
+async function submitExpense(btn){
+  const amount = parseFloat(val('f_amt').replace(/[^0-9.]/g,''));
+  const merchant = val('f_mer');
+  if(!amount || amount <= 0) return toast('Enter an amount');
+  if(!merchant) return toast('Enter a merchant');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await saveExpense({ amount, merchant, category: picked('f_cat') || 'Uncategorized',
+      account: val('f_acc'), direction: picked('f_dir') || 'expense', date: val('f_date') || todayISO(),
+      note: val('f_note') });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : `Logged ${money(amount)} at ${merchant}`);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+function sheetWorkout(){
+  openSheet(`<h1 style="font-size:22px">Log workout</h1>
+    <label>Activity</label>${chipRow('f_act', ACTIVITIES, 'Lifting')}
+    <label>Minutes</label><input id="f_dur" class="big" type="text" inputmode="numeric" placeholder="45">
+    <label>Intensity</label>${chipRow('f_int', INTENSITY, 'moderate')}
+    <label>Distance in miles (optional)</label><input id="f_dist" type="text" inputmode="decimal" placeholder="">
+    <label>Date</label><input id="f_wdate" type="date" value="${todayISO()}">
+    <label>How it felt</label><textarea id="f_wnote" placeholder="Two sentences is plenty."></textarea>
+    <button class="btn" style="margin-top:18px" onclick="submitWorkout(this)">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitWorkout(btn){
+  const duration_min = parseInt(val('f_dur'), 10);
+  if(!duration_min || duration_min <= 0) return toast('How many minutes?');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await saveWorkout({ activity: picked('f_act') || 'Workout', duration_min,
+      intensity: picked('f_int') || 'moderate', distance_mi: val('f_dist'),
+      date: val('f_wdate') || todayISO(), note: val('f_wnote') });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Workout logged');
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+function sheetCheckin(){
+  openSheet(`<h1 style="font-size:22px">Check in</h1>
+    <label>Date</label><input id="c_date" type="date" value="${todayISO()}">
+    <label>Mood, 1 to 10</label>${chipRow('c_mood', ['1','2','3','4','5','6','7','8','9','10'], '')}
+    <label>Energy, 1 to 10</label>${chipRow('c_energy', ['1','2','3','4','5','6','7','8','9','10'], '')}
+    <label>Hours slept</label><input id="c_sleep" type="text" inputmode="decimal" placeholder="7.5">
+    <label>What matters most today</label><input id="c_focus" placeholder="One thing.">
+    <label>Journal</label><textarea id="c_journal" placeholder="What happened, what you noticed."></textarea>
+    <label>A win</label><input id="c_win" placeholder="However small.">
+    <label>Rate the day, 1 to 10</label>${chipRow('c_rating', ['1','2','3','4','5','6','7','8','9','10'], '')}
+    <button class="btn" style="margin-top:18px" onclick="submitCheckin(this)">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitCheckin(btn){
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await saveCheckin({ date: val('c_date') || todayISO(), mood: picked('c_mood'),
+      energy: picked('c_energy'), sleep_hours: val('c_sleep'), day_rating: picked('c_rating'),
+      focus: val('c_focus'), journal: val('c_journal'), win: val('c_win'), weight_lbs: '' });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Check-in saved');
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+function sheetMetrics(){
+  openSheet(`<h1 style="font-size:22px">Body metrics</h1>
+    <label>Date</label><input id="m_date" type="date" value="${todayISO()}">
+    <label>Weight (lb)</label><input id="m_w" class="big" type="text" inputmode="decimal" placeholder="0">
+    <label>Body fat %</label><input id="m_bf" type="text" inputmode="decimal">
+    <label>Resting heart rate</label><input id="m_hr" type="text" inputmode="numeric">
+    <label>Waist (in)</label><input id="m_waist" type="text" inputmode="decimal">
+    <button class="btn" style="margin-top:18px" onclick="submitMetrics(this)">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitMetrics(btn){
+  if(!val('m_w') && !val('m_bf') && !val('m_hr') && !val('m_waist')) return toast('Nothing to save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await saveMetrics({ date: val('m_date') || todayISO(), weight_lbs: val('m_w'),
+      body_fat_pct: val('m_bf'), resting_hr: val('m_hr'), waist_in: val('m_waist') });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Metrics saved');
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+function sheetGoal(i){
+  const g = GOALREFS[i];
+  if(!g) return toast('Goal not found');
+  openSheet(`<h1 style="font-size:22px">${esc(g.name)}</h1>
+    <p class="sub">${esc(g.metric||'')} · currently ${g.current} of ${g.target} ${esc(g.unit||'')}</p>
+    <label>New value</label><input id="g_val" class="big" type="text" inputmode="decimal" value="${g.current}">
+    <label>Date</label><input id="g_date" type="date" value="${todayISO()}">
+    <label>Note</label><input id="g_note" placeholder="What moved it?">
+    <button class="btn" style="margin-top:18px" onclick="submitGoal(this, ${i})">Save progress</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitGoal(btn, i){
+  const g = GOALREFS[i];
+  const value = parseFloat(val('g_val'));
+  if(isNaN(value)) return toast('Enter a number');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await saveGoalProgress({ path: g.path, name: g.name, value, date: val('g_date') || todayISO(), note: val('g_note') });
+    bump(d => { const t = d.life.goals.find(x => x.path === g.path);
+      if(t){ t.current = value; t.percent = t.target ? +(value/t.target*100).toFixed(1) : null; } });
+    closeSheet(); render(); toast('Progress saved');
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save progress'; }
+}
+
+/* ============================ settings actions ============================ */
+
+function saveSettings(){
+  const sel = id => { const n = document.getElementById(id); return n ? n.value : ''; };
+  saveCfg({ owner: val('s_owner'), repo: val('s_repo'), branch: val('s_branch') || 'main',
+    vaultPath: val('s_vault'), token: val('s_token'), vapid: val('s_vapid'),
+    anthropicKey: val('s_akey') || cfg().anthropicKey,
+    model: sel('s_model') || cfg().model, depth: sel('s_depth') || cfg().depth });
+  toast('Saved'); refresh(true);
+}
+
+async function testConn(){
+  try {
+    const r = await gh('');
+    if(!r) return toast('Repo not found — check the name');
+    const f = await getFile(vpath('90 System/summary.json'));
+    toast(f ? `Connected to ${r.full_name}` : `Connected, but no summary.json yet — run the workflow once`);
+  } catch(e){ toast('Failed: ' + e.message); }
+}
+
+async function refresh(force){
+  await loadSummary(force);
+  const n = await flushQueue();
+  render();
+  if(force) toast(n ? `Refreshed, uploaded ${n} queued` : 'Refreshed');
+}
+
+async function syncNow(){
+  const n = await flushQueue();
+  render();
+  toast(n ? `Uploaded ${n} entries` : 'Nothing waiting');
+}
+
+function resetSpend(){ localStorage.removeItem('lifeos.spend'); toast('Counter reset'); render(); }
+
+function wipe(){
+  if(!confirm('Clear your repo settings and token from this device?')) return;
+  localStorage.removeItem(CFG_KEY); localStorage.removeItem(CACHE_KEY);
+  localStorage.removeItem('lifeos.spend');
+  DATA = null; CHAT = []; PENDING = []; toast('Cleared'); render();
+}
+
+/* ============================ push ============================ */
+
+function urlB64ToUint8(base64){
+  const pad = '='.repeat((4 - base64.length % 4) % 4);
+  const b = (base64 + pad).replace(/-/g,'+').replace(/_/g,'/');
+  return Uint8Array.from(atob(b), c => c.charCodeAt(0));
+}
+
+async function enablePush(){
+  const key = val('s_vapid') || cfg().vapid;
+  if(!key) return toast('Paste your VAPID public key first');
+  saveCfg({ vapid: key });
+  if(!('serviceWorker' in navigator) || !('PushManager' in window))
+    return toast('This browser cannot do push. On iPhone, install to the home screen first.');
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const perm = await Notification.requestPermission();
+    if(perm !== 'granted') return toast('Notifications not allowed');
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true,
+      applicationServerKey: urlB64ToUint8(key) });
+    const path = vpath('90 System/push/subscriptions.json');
+    let list = [], sha;
+    const cur = await getFile(path);
+    if(cur){ try { list = JSON.parse(cur.text); } catch(e){ list = []; } sha = cur.sha; }
+    const j = sub.toJSON();
+    if(!list.some(s => s.endpoint === j.endpoint)) list.push(j);
+    await putFile(path, JSON.stringify(list, null, 2) + '\n', 'Register push device', sha);
+    toast('Notifications on — reminders will arrive on schedule');
+  } catch(e){ toast('Push failed: ' + e.message); }
+}
+
+/* ============================ boot ============================ */
+
+document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => go(b.dataset.v)));
+window.addEventListener('online', () => { flushQueue().then(n => { if(n) toast(`Uploaded ${n} queued entries`); render(); }); });
+window.addEventListener('offline', render);
+document.addEventListener('visibilitychange', () => { if(!document.hidden) refresh(false); });
+
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').catch(e => console.warn('sw failed', e));
+}
+
+DATA = cachedSummary();
+render();
+if(configured()) refresh(false);
+</script>
+</body>
+</html>
