@@ -351,12 +351,44 @@ async function write(path, text, message, opts={}){
   }
 }
 
+/* Read-modify-write ops that patch a daily note (check-in, add-a-task)
+   go through here instead of write(). They queue {kind, fields} -- the
+   raw inputs -- rather than a pre-resolved file body, and re-run the
+   merge against whatever the file actually contains at the moment the
+   write reaches GitHub, whether that's right now or after flushQueue()
+   picks it up later. Resolving the merge once, up front, and queuing the
+   result as a fixed blob (the old approach, and still what write() does
+   for straightforward creates) is exactly wrong here: it either bakes in
+   a blank DAILY_TEMPLATE in place of the day's real content whenever the
+   read that built it failed for any reason (a dropped connection, not
+   just "the file doesn't exist yet"), or -- once queued -- clobbers
+   whatever anyone else wrote to that same file before this entry
+   eventually flushes. Both silently erase mood/journal/wins/open-loops
+   that were already saved. See MERGE_FNS below for the two kinds. */
+async function mergeWrite(path, kind, fields, message){
+  if(!navigator.onLine){ await queueAdd({path, message, kind, fields}); return 'queued'; }
+  try {
+    const cur = await getFile(path);
+    const md = MERGE_FNS[kind](cur ? cur.text : DAILY_TEMPLATE(dateFromDailyPath(path)), fields);
+    await putFile(path, md, message, cur ? cur.sha : undefined);
+    return 'saved';
+  } catch(e){
+    await queueAdd({path, message, kind, fields});
+    console.warn('queued after error', e);
+    return 'queued';
+  }
+}
+
 async function flushQueue(){
   if(!navigator.onLine || !configured()) return 0;
   const ops = await queueAll(); let n = 0;
   for(const op of ops){
     try {
-      if(op.mode === 'update'){
+      if(op.kind){
+        const cur = await getFile(op.path);
+        const md = MERGE_FNS[op.kind](cur ? cur.text : DAILY_TEMPLATE(dateFromDailyPath(op.path)), op.fields);
+        await putFile(op.path, md, op.message, cur ? cur.sha : undefined);
+      } else if(op.mode === 'update'){
         const cur = await getFile(op.path);
         await putFile(op.path, op.text, op.message, cur ? cur.sha : undefined);
       } else {
@@ -554,18 +586,26 @@ async function saveMetrics(f){
   return r;
 }
 
-async function saveCheckin(f){
-  const path = vpath(`10 Daily/${f.date}.md`);
-  let md;
-  try {
-    const cur = await getFile(path);
-    md = cur ? cur.text : DAILY_TEMPLATE(f.date);
-  } catch(e){ md = DAILY_TEMPLATE(f.date); }
+/* Extracted so it can run twice: once against whatever saveCheckin/addTask
+   read just now, and again inside flushQueue() against whatever the file
+   holds by the time a queued entry actually reaches GitHub. Never bakes
+   its result into the queue itself -- see mergeWrite(). */
+function mergeCheckinInto(md, f){
   ['mood','energy','sleep_hours','weight_lbs','day_rating'].forEach(k => { md = setFm(md, k, f[k]); });
   if(f.focus)   md = appendSection(md, 'Morning check-in', `**Focus:** ${f.focus}`);
   if(f.journal) md = appendSection(md, 'Journal', f.journal);
   if(f.win)     md = appendSection(md, 'Wins', `- ${f.win}`);
-  return write(path, md, `Check-in ${f.date}`, {mode:'update'});
+  return md;
+}
+function mergeTaskAddInto(md, fields){
+  return appendSection(md, 'Open loops', `- [ ] ${fields.text}`);
+}
+const MERGE_FNS = { checkin: mergeCheckinInto, task_add: mergeTaskAddInto };
+const dateFromDailyPath = path => (path.match(/(\d{4}-\d{2}-\d{2})\.md$/) || [,todayISO()])[1];
+
+async function saveCheckin(f){
+  const path = vpath(`10 Daily/${f.date}.md`);
+  return mergeWrite(path, 'checkin', f, `Check-in ${f.date}`);
 }
 
 async function saveGoalProgress(f){
@@ -613,6 +653,9 @@ shown to the person for approval.
 {"type":"workout","summary":"","activity":"Cycle","duration_min":48,"intensity":"easy|moderate|hard|max","distance_mi":null,"date":"YYYY-MM-DD","note":""}
 {"type":"metric","summary":"","date":"YYYY-MM-DD","weight_lbs":null,"body_fat_pct":null,"resting_hr":null,"waist_in":null}
 {"type":"checkin","summary":"","date":"YYYY-MM-DD","mood":null,"energy":null,"sleep_hours":null,"day_rating":null,"focus":"","journal":"","win":""}
+  (mood, energy, and day_rating are each a whole number 1-10, or null — same scale as the app's own
+  check-in sheet. "Low energy" with no number given is a null, described in "journal" instead; do
+  not invent a 1-10 value for it, and never write a word like "low" or "great" into these fields.)
 {"type":"goal_progress","summary":"","goal_id":0,"value":400,"note":""}
 {"type":"task_done","summary":"","task_id":3}
 {"type":"task_add","summary":"","text":"Call the credit union","date":"YYYY-MM-DD"}
@@ -760,6 +803,17 @@ async function askClaude(userText){
 
 /* ---- executing approved operations ---- */
 
+/* Defense in depth against the model writing something outside the 1-10
+   contract the rest of the app assumes for mood/energy/day_rating -- the
+   check-in edit sheets are literally chip pickers over '1'..'10'. Clamp
+   here rather than trust the prompt alone; a stray "low" or a 0-100 scale
+   should become a blank field, not silently-wrong data in the vault. */
+function scale10(v){
+  if(v === null || v === undefined || v === '') return '';
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 1 && n <= 10 ? n : '';
+}
+
 async function runOp(op){
   const date = op.date || todayISO();
   switch(op.type){
@@ -775,8 +829,8 @@ async function runOp(op){
       return saveMetrics({ date, weight_lbs: op.weight_lbs || '', body_fat_pct: op.body_fat_pct || '',
         resting_hr: op.resting_hr || '', waist_in: op.waist_in || '' });
     case 'checkin':
-      return saveCheckin({ date, mood: op.mood ?? '', energy: op.energy ?? '',
-        sleep_hours: op.sleep_hours ?? '', day_rating: op.day_rating ?? '',
+      return saveCheckin({ date, mood: scale10(op.mood), energy: scale10(op.energy),
+        sleep_hours: op.sleep_hours ?? '', day_rating: scale10(op.day_rating),
         focus: op.focus || '', journal: op.journal || '', win: op.win || '' });
     case 'goal_progress': {
       const g = (window.__goalIndex || [])[op.goal_id];
@@ -832,11 +886,7 @@ async function uncompleteTask(id){
 
 async function addTask(text, date){
   const path = vpath(`10 Daily/${date}.md`);
-  let md;
-  try { const cur = await getFile(path); md = cur ? cur.text : DAILY_TEMPLATE(date); }
-  catch(e){ md = DAILY_TEMPLATE(date); }
-  md = appendSection(md, 'Open loops', `- [ ] ${text}`);
-  return write(path, md, `Add task: ${text.slice(0,50)}`, { mode:'update' });
+  return mergeWrite(path, 'task_add', {text}, `Add task: ${text.slice(0,50)}`);
 }
 
 function taskRow(t){
