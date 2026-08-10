@@ -1864,11 +1864,19 @@ function choresStrip(){
       <span class="sub">nothing due today</span></div></div>`;
   }
   const late = due.filter(c => c.overdue_days > 0);
+  // Grouped by frequency rather than one flat list -- Daily is seeded open in
+  // OPEN_SECTIONS (it's the common case), Weekly/Monthly/X Days start closed
+  // so a long due list doesn't bury Today under things that aren't urgent.
+  const groups = CHORE_FREQS
+    .map(freq => ({freq, items: due.filter(c => c.frequency === freq)}))
+    .filter(g => g.items.length);
+  const body = groups.map(g => collapsible(`todayfreq:${g.freq}`, CHORE_FREQ_LABELS[g.freq] || g.freq,
+    `<div class="list">` + g.items.map(c => choreRow(c, choreRef(c))).join('') + `</div>`,
+    {subtitle: String(g.items.length)})).join('');
   return `<div class="card" style="border-color:${late.length ? 'var(--bad)' : 'var(--line)'}">
     <div class="row"><b>${late.length ? 'Chores are overdue' : 'Chores due today'}</b>
     <span class="sub">${due.length} left</span></div>
-    <div class="list" style="margin-top:10px">` +
-    due.map(c => choreRow(c, choreRef(c))).join('') + `</div></div>`;
+    <div style="margin-top:2px">` + body + `</div></div>`;
 }
 
 function viewToday(){
@@ -2343,7 +2351,7 @@ function discardAndCloseSheet(){
 // (closed); chore category groups and the Mon-Fri day cards are seeded open
 // below so the common case doesn't hide anything on first view.
 let OPEN_SECTIONS = new Set(['chorecat:home', 'chorecat:pets', 'chorecat:admin',
-  'sch_day_1', 'sch_day_2', 'sch_day_3', 'sch_day_4', 'sch_day_5']);
+  'sch_day_1', 'sch_day_2', 'sch_day_3', 'sch_day_4', 'sch_day_5', 'todayfreq:daily']);
 function toggleSection(key){
   OPEN_SECTIONS.has(key) ? OPEN_SECTIONS.delete(key) : OPEN_SECTIONS.add(key);
   render();
