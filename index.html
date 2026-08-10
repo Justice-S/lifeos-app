@@ -1165,11 +1165,9 @@ function bumpChore(name){
       c.due = false; c.overdue_days = 0;
       d.chores.due = (d.chores.due || []).filter(x => x.name !== name);
       d.chores.overdue = (d.chores.overdue || []).filter(x => x.name !== name);
-      d.chores.pets_due = (d.chores.pets_due || []).filter(x => x.name !== name);
     }
     d.chores.due_count = (d.chores.due || []).length;
     d.chores.overdue_count = (d.chores.overdue || []).length;
-    d.chores.pets_clear = (d.chores.pets_due || []).length === 0;
   });
 }
 
@@ -1265,37 +1263,22 @@ function viewChores(){
   const ch = d.chores;
 
   h += renderChoreFilters(ch);
-  const showPets = CHORE_FILTER.category === 'all' || CHORE_FILTER.category === 'pets';
 
-  if(showPets && ch.pets && ch.pets.length){
-    h += `<h2>Pets</h2>`;
-    if(ch.pets_clear){
-      h += `<div class="card"><div class="row"><b class="good">All set</b>
-        <span class="sub">fed, watered, litter done</span></div></div>`;
-    } else {
-      h += `<div class="list">` + ch.pets_due.filter(choreMatchesFilter).map(c => choreRow(c, choreRef(c))).join('') + `</div>`;
-    }
-    const petsDone = ch.pets.filter(c => !c.due && choreMatchesFilter(c));
-    if(petsDone.length && !ch.pets_clear){
-      h += `<p class="sub" style="margin-top:8px">Done: ${petsDone.map(c => esc(c.name)).join(', ')}</p>`;
-    }
-  }
-
-  const rest = (ch.due || []).filter(c => c.category !== 'pets' && choreMatchesFilter(c));
-  h += `<h2>Due${rest.length ? '' : ' — nothing else'}</h2>`;
-  if(!rest.length){
+  const due = (ch.due || []).filter(choreMatchesFilter);
+  h += `<h2>Due${due.length ? '' : ' — nothing else'}</h2>`;
+  if(!due.length){
     h += `<div class="card"><span class="sub">${choreFilterActive()
-      ? 'Nothing due matches these filters.' : 'Everything else is done. Go and enjoy that.'}</span></div>`;
+      ? 'Nothing due matches these filters.' : 'Everything is done. Go and enjoy that.'}</span></div>`;
   } else {
-    const groups = CHORE_CATEGORIES.filter(cat => cat !== 'pets')
-      .map(cat => ({cat, items: rest.filter(c => c.category === cat)}))
+    const groups = CHORE_CATEGORIES
+      .map(cat => ({cat, items: due.filter(c => c.category === cat)}))
       .filter(g => g.items.length);
     h += groups.map(g => collapsible(`chorecat:${g.cat}`, CHORE_CATEGORY_LABELS[g.cat] || g.cat,
       `<div class="list">` + g.items.map(c => choreRow(c, choreRef(c))).join('') + `</div>`,
       {subtitle: String(g.items.length)})).join('');
   }
 
-  const notDue = (ch.all || []).filter(c => !c.due && (showPets || c.category !== 'pets') && choreMatchesFilter(c));
+  const notDue = (ch.all || []).filter(c => !c.due && choreMatchesFilter(c));
   if(notDue.length){
     h += `<h2>Done, and when it comes back</h2><div class="list">` + notDue.map(c => { const i = choreRef(c);
       return `<div class="item">
@@ -1825,25 +1808,17 @@ function needsSetup(){
 function choresStrip(){
   const ch = DATA && DATA.chores;
   if(!ch || !(ch.all || []).length) return '';
-  const pets = ch.pets_due || [];
-  let h = '';
-  if(pets.length){
-    const late = pets.filter(c => c.overdue_days > 0);
-    h += `<div class="card" style="border-color:${late.length ? 'var(--bad)' : 'var(--line)'}">
-      <div class="row"><b>${late.length ? 'Pets are waiting' : 'Pets still need you'}</b>
-      <span class="sub">${pets.length} left</span></div>
-      <div class="list" style="margin-top:10px">` +
-      pets.map(c => choreRow(c, choreRef(c))).join('') + `</div></div>`;
-  } else if((ch.pets || []).length){
-    h += `<div class="card"><div class="row"><b class="good">Pets are sorted</b>
-      <span class="sub">fed, watered, litter done</span></div></div>`;
+  const due = ch.due || [];
+  if(!due.length){
+    return `<div class="card"><div class="row"><b class="good">All chores done</b>
+      <span class="sub">nothing due today</span></div></div>`;
   }
-  const rest = (ch.due || []).filter(c => c.category !== 'pets');
-  if(rest.length){
-    h += `<button class="btn sec" style="margin:2px 0 10px" onclick="go('chores')">
-      ${rest.length} other chore${rest.length > 1 ? 's' : ''} due</button>`;
-  }
-  return h;
+  const late = due.filter(c => c.overdue_days > 0);
+  return `<div class="card" style="border-color:${late.length ? 'var(--bad)' : 'var(--line)'}">
+    <div class="row"><b>${late.length ? 'Chores are overdue' : 'Chores due today'}</b>
+    <span class="sub">${due.length} left</span></div>
+    <div class="list" style="margin-top:10px">` +
+    due.map(c => choreRow(c, choreRef(c))).join('') + `</div></div>`;
 }
 
 function viewToday(){
@@ -2317,7 +2292,7 @@ function discardAndCloseSheet(){
 // Schedule tab's seven per-day cards. Settings sections start unseeded
 // (closed); chore category groups and the Mon-Fri day cards are seeded open
 // below so the common case doesn't hide anything on first view.
-let OPEN_SECTIONS = new Set(['chorecat:home', 'chorecat:admin',
+let OPEN_SECTIONS = new Set(['chorecat:home', 'chorecat:pets', 'chorecat:admin',
   'sch_day_1', 'sch_day_2', 'sch_day_3', 'sch_day_4', 'sch_day_5']);
 function toggleSection(key){
   OPEN_SECTIONS.has(key) ? OPEN_SECTIONS.delete(key) : OPEN_SECTIONS.add(key);
