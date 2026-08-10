@@ -132,7 +132,6 @@ textarea{min-height:88px;resize:vertical}
 .cal-cell.h3{background:color-mix(in srgb, var(--accent) 70%, var(--panel2));color:var(--ink)}
 .cal-cell.h4{background:var(--accent);color:var(--ink);font-weight:700}
 .cal-cell.exempt{opacity:.4}
-.cal-cell .due-dot{position:absolute;bottom:2px;width:4px;height:4px;border-radius:50%;background:var(--warn)}
 .cal-week-strip{display:flex;gap:6px;margin-top:8px}
 .cal-week-strip .cal-cell{flex:1;aspect-ratio:auto;height:58px;flex-direction:column;gap:3px}
 .streak-row{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;margin-top:6px;-webkit-overflow-scrolling:touch}
@@ -198,7 +197,6 @@ const EXEMPTION_LABELS = { holiday:'Holiday', day_off:'Day off', event:'Event' }
 /* ============================ tiny helpers ============================ */
 
 const $ = s => document.querySelector(s);
-const el = (t,c,h) => { const n=document.createElement(t); if(c)n.className=c; if(h!=null)n.innerHTML=h; return n; };
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, m =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const money = n => '$' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -248,6 +246,16 @@ async function putFile(path, text, message, sha, rawB64){
   const body = { message, content: rawB64 || b64(text), branch: cfg().branch };
   if(sha) body.sha = sha;
   return gh(`/contents/${enc(path)}`, { method:'PUT', body: JSON.stringify(body) });
+}
+
+/* Real delete, not a soft-remove like chores' active:false — an exemption
+   carries no history worth keeping. Online-only on purpose: the offline
+   queue (see write() below) is built for creates/updates, where a stale sha
+   just means "fetch it again"; queuing a delete against a sha that goes
+   stale while offline is a different, easier-to-get-wrong failure mode, so
+   this asks for a connection instead of pretending to queue safely. */
+async function deleteFile(path, sha, message){
+  return gh(`/contents/${enc(path)}`, { method:'DELETE', body: JSON.stringify({ message, sha, branch: cfg().branch }) });
 }
 
 /* ============================ offline queue (IndexedDB) ============================ */
@@ -537,7 +545,8 @@ shown to the person for approval.
 {"type":"task_add","summary":"","text":"Call the credit union","date":"YYYY-MM-DD"}
 {"type":"achievement","summary":"","title":"First 10k run","domain":"fitness|finance|life","date":"YYYY-MM-DD","note":""}
 {"type":"chore_done","summary":"","chore":"Feed cats","times":1,"date":"YYYY-MM-DD","note":""}
-{"type":"chore_add","summary":"","name":"Water the plants","category":"home|pets","frequency":"daily|weekly|monthly|every_n_days","times_per_period":1,"every_days":null,"area":"","pet":""}
+{"type":"chore_add","summary":"","name":"Water the plants","category":"home|pets|admin","frequency":"daily|weekly|monthly|every_n_days","times_per_period":1,"every_days":null,"area":"","pet":""}
+{"type":"exemption","summary":"","kind":"holiday|day_off|event","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","note":""}
 
 Rules that matter:
 
@@ -557,6 +566,10 @@ Rules that matter:
 - "Fed the cats twice" is one chore_done with times: 2, not two operations.
 - Pet care is worth confirming when it goes unmentioned for a day. Feeding, water,
   and litter are the ones to ask about — not the vacuuming.
+- For exemption, end_date defaults to start_date for a single day ("mark tomorrow
+  as a day off"). It covers every chore and every reminder for that range — there's
+  no way to scope it to specific ones from here; if the person wants that, tell them
+  to narrow it from the Calendar tab instead of guessing which ones they meant.
 - One checkin operation per day at most; merge everything reflective into it.
 - Set "done" to true when you have nothing further worth asking.
 - Questions must be answerable in a sentence. Never ask more than three at once.`;
@@ -571,6 +584,8 @@ function buildContext(){
   const tasks = (life.open_tasks || []).slice(0, 25).map(t => ({ id:t.id, text:t.text }));
   const chores = ((d.chores && d.chores.due) || []).slice(0, 20);
   const allChores = ((d.chores && d.chores.all) || []).map(c => c.name);
+  const today = todayISO();
+  const soon = (d.exemptions || []).filter(e => e.end_date >= today).slice(0, 8);
   const depth = cfg().depth || 'gaps';
   const depthLine = {
     minimal: 'Ask only when the update is genuinely ambiguous. Do not raise anything the person did not mention.',
@@ -578,7 +593,7 @@ function buildContext(){
     full:    'Work through the open goals and tasks over several turns until each has a current status. Two or three questions per turn, never more. Set done only when everything below has been addressed or explicitly skipped.'
   }[depth];
 
-  return `Today is ${todayISO()}.
+  return `Today is ${today}.
 
 Follow-up depth: ${depthLine}
 
@@ -597,6 +612,10 @@ ${chores.length ? chores.map(c => `  ${c.name} (${c.category}, ${c.frequency}` +
     (c.times_per_period > 1 ? `, ${c.done_this_period || 0} of ${c.times_per_period} done today` : '') +
     (c.overdue_days > 0 ? `, ${c.overdue_days} days overdue` : '') + ')').join('\n') : '  none outstanding'}
 All chore names: ${allChores.join(', ') || 'none defined'}
+
+Exemptions covering today or soon (chores/reminders already off for these days —
+don't suggest adding one that overlaps):
+${soon.length ? soon.map(e => `  ${e.kind}: ${e.start_date}${e.end_date !== e.start_date ? ' to ' + e.end_date : ''}${e.note ? ' — ' + e.note : ''}`).join('\n') : '  none'}
 
 Recent context: spent ${money.spent_month || 0} this month, ${fit.sessions_7d || 0} workouts in the
 last 7 days, latest weight ${fit.latest_weight || 'unknown'}.
@@ -701,6 +720,9 @@ async function runOp(op){
       return last;
     }
     case 'chore_add':  return saveChore(op);
+    case 'exemption':
+      return saveExemption({ kind: op.kind || 'event', start_date: op.start_date || date,
+        end_date: op.end_date || op.start_date || date, note: op.note || '', chores: [], notifications: [] });
     default: throw new Error('Unknown operation: ' + op.type);
   }
 }
@@ -852,12 +874,13 @@ function opLabel(op){
     case 'achievement': return `Achievement: ${op.title}`;
     case 'chore_done': return `${op.chore}${op.times > 1 ? ` ×${op.times}` : ''} done`;
     case 'chore_add': return `New chore: ${op.name}`;
+    case 'exemption': return `${EXEMPTION_LABELS[op.kind] || op.kind}: ${op.note || op.start_date}`;
     default: return op.type;
   }
 }
 const OP_ICON = { expense:'💵', income:'💰', workout:'🏃', metric:'⚖️', checkin:'📝',
                   goal_progress:'🎯', task_done:'✅', task_add:'📌', achievement:'🏆',
-                  chore_done:'🧹', chore_add:'🧺' };
+                  chore_done:'🧹', chore_add:'🧺', exemption:'📅' };
 
 function viewTalk(){
   const c = cfg();
@@ -924,6 +947,8 @@ function viewTalk(){
 function opDetail(op){
   const bits = [];
   if(op.date) bits.push(op.date);
+  if(op.start_date) bits.push(op.end_date && op.end_date !== op.start_date
+    ? `${op.start_date} → ${op.end_date}` : op.start_date);
   if(op.category) bits.push(op.category);
   if(op.account) bits.push(op.account);
   if(op.intensity) bits.push(op.intensity);
@@ -1071,7 +1096,7 @@ function bumpChore(name){
 
 const FREQ_LABEL = c => c.frequency === 'every_n_days'
   ? `${c.every_days} Days`
-  : c.frequency + (c.times_per_period > 1 ? ` ×${c.times_per_period}` : '');
+  : (CHORE_FREQ_LABELS[c.frequency] || c.frequency) + (c.times_per_period > 1 ? ` ×${c.times_per_period}` : '');
 
 function choreRow(c, i){
   const late = c.overdue_days > 0;
@@ -1204,19 +1229,16 @@ function viewCalendar(){
   const ex = d.exemptions || [];
   h += `<h2>Exemptions${ex.length ? '' : ' — none set'}</h2>`;
   h += ex.length
-    ? `<div class="list">` + ex.map(e => {
-        const scope = [
-          (e.chores||[]).length ? `${e.chores.length} chore${e.chores.length>1?'s':''}` : '',
-          (e.notifications||[]).length ? `${e.notifications.length} reminder${e.notifications.length>1?'s':''}` : ''
-        ].filter(Boolean).join(', ');
-        const scopeLabel = scope || 'everything';
-        return `<div class="item">
-        <div><div class="m">${esc(e.note || EXEMPTION_LABELS[e.kind] || e.kind)}</div>
+    ? `<div class="list">` + ex.map((e, i) => `<div class="item">
+        <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+          onclick="sheetEditExemption(${i})">
+        <div class="m">${esc(e.note || EXEMPTION_LABELS[e.kind] || e.kind)}</div>
         <div class="s">${esc(EXEMPTION_LABELS[e.kind] || e.kind)} · ${esc(e.start_date)}${
-          e.end_date !== e.start_date ? ' → ' + esc(e.end_date) : ''} · ${esc(scopeLabel)}</div></div>
-      </div>`; }).join('') + `</div>`
+          e.end_date !== e.start_date ? ' → ' + esc(e.end_date) : ''} · ${esc(exemptionScopeLabel(e))}</div>
+        </button>
+      </div>`).join('') + `</div>`
     : `<div class="card"><span class="sub">No holidays, days off, or events set — chores and
-        reminders run normally every day. To remove one later, edit it in Obsidian.</span></div>`;
+        reminders run normally every day.</span></div>`;
   return h;
 }
 
@@ -1337,6 +1359,9 @@ const REMINDER_ANCHORS = ['wake','sleep','work_start','work_end','fixed'];
 const ANCHOR_LABELS = { wake:'Wake', sleep:'Sleep', work_start:'Start work', work_end:'End work', fixed:'Fixed time' };
 const REMINDER_FREQS = ['daily','weekdays','weekends','weekly','off'];
 const FREQ_DISPLAY = { daily:'Daily', weekdays:'Weekdays', weekends:'Weekends', weekly:'Weekly', off:'Off' };
+// send.js's own convention (JS Date#getDay after shifting to local time): 0=Sunday..6=Saturday.
+const WEEKDAYS = ['0','1','2','3','4','5','6'];
+const WEEKDAY_LABELS = { '0':'Sun', '1':'Mon', '2':'Tue', '3':'Wed', '4':'Thu', '5':'Fri', '6':'Sat' };
 
 function reminderScheduleLabel(r){
   if(r.anchor === 'fixed') return `${r.time || '—'} local`;
@@ -1368,7 +1393,8 @@ function renderScheduleSection(){
         <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
           onclick="sheetEditReminder(${i})">
           <div class="m">${esc(r.title || r.id)}</div>
-          <div class="s">${esc(reminderScheduleLabel(r))} · ${esc(FREQ_DISPLAY[r.frequency] || r.frequency || 'Daily')}</div>
+          <div class="s">${esc(reminderScheduleLabel(r))} · ${esc(FREQ_DISPLAY[r.frequency] || r.frequency || 'Daily')}${
+            r.frequency === 'weekly' ? ` (${esc(WEEKDAY_LABELS[String(r.weekday === undefined ? 0 : r.weekday)])})` : ''}</div>
         </button>
       </div>`).join('') + `</div>`
     : `<div class="card"><span class="sub">No reminders configured yet.</span></div>`;
@@ -1399,6 +1425,8 @@ function sheetEditReminder(i){
     <label>Offset from the event, in minutes — negative fires before it (only used for event anchors)</label>
     <input id="rm_offset" type="text" inputmode="numeric" value="${r.anchor !== 'fixed' ? (r.offset_min || 0) : 0}">
     <label>Frequency</label>${chipRow('rm_freq', REMINDER_FREQS, r.frequency || 'daily', FREQ_DISPLAY)}
+    <label>Weekday (only used if frequency is "Weekly")</label>
+    ${chipRow('rm_weekday', WEEKDAYS, String(r.weekday === undefined ? 0 : r.weekday), WEEKDAY_LABELS)}
     <button class="btn" style="margin-top:18px" onclick="submitEditReminder(this, ${i})">Save</button>
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
 }
@@ -1413,6 +1441,7 @@ async function submitEditReminder(btn, i){
   if(anchor === 'fixed'){ r.time = val('rm_time') || r.time || '00:00'; delete r.offset_min; }
   else { r.offset_min = parseInt(val('rm_offset'), 10) || 0; delete r.time; }
   r.frequency = picked('rm_freq') || 'daily';
+  r.weekday = parseInt(picked('rm_weekday'), 10) || 0;
   try {
     const res = await saveReminderConfig(rc);
     closeSheet(); render();
@@ -1472,6 +1501,40 @@ async function submitAddExemption(btn){
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Exemption added');
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+function exemptionScopeLabel(e){
+  const scope = [
+    (e.chores||[]).length ? `${e.chores.length} chore${e.chores.length>1?'s':''}` : '',
+    (e.notifications||[]).length ? `${e.notifications.length} reminder${e.notifications.length>1?'s':''}` : ''
+  ].filter(Boolean).join(', ');
+  return scope || 'everything';
+}
+
+function sheetEditExemption(i){
+  const e = (DATA && DATA.exemptions || [])[i];
+  if(!e) return toast('Not found');
+  openSheet(`<h1 style="font-size:22px">${esc(e.note || EXEMPTION_LABELS[e.kind] || e.kind)}</h1>
+    <p class="sub">${esc(EXEMPTION_LABELS[e.kind] || e.kind)} · ${esc(e.start_date)}${
+      e.end_date !== e.start_date ? ' → ' + esc(e.end_date) : ''} · scoped to ${esc(exemptionScopeLabel(e))}</p>
+    <p class="sub" style="margin-top:10px">To change dates, kind, or scope, edit the note directly in
+    Obsidian — from here you can only remove it.</p>
+    <button class="btn danger" style="margin-top:18px" onclick="removeExemption(${i})">Remove exemption</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function removeExemption(i){
+  const e = (DATA && DATA.exemptions || [])[i];
+  if(!e || !e.path) return toast('Exemption not found');
+  if(!navigator.onLine) return toast('Connect to the internet to remove this, then try again.');
+  try {
+    const cur = await getFile(vpath(e.path));
+    if(!cur) throw new Error('Already gone');
+    await deleteFile(vpath(e.path), cur.sha, `Remove exemption: ${e.note || e.kind}`);
+    bump(d => { d.exemptions = (d.exemptions||[]).filter((x, idx) => idx !== i); });
+    closeSheet(); render();
+    toast('Exemption removed');
+  } catch(err){ toast('Failed: ' + err.message); }
 }
 
 /* ============================ views ============================ */
@@ -1790,6 +1853,7 @@ function viewSettings(){
     <p class="sub" style="margin-top:8px">From the key pair you generate during setup. Paste the
     <b>public</b> half here; the private half stays a GitHub secret.</p>
     <button class="btn sec" style="margin-top:10px" onclick="enablePush()">Enable notifications</button>
+    <button class="btn sec" style="margin-top:8px" onclick="disablePush()">Disable notifications</button>
     <p class="sub" style="margin-top:10px">On iPhone this only works once the app is installed to your
     home screen from Safari's Share menu.</p>
   </div>
@@ -2177,10 +2241,18 @@ async function syncNow(){
 function resetSpend(){ localStorage.removeItem('lifeos.spend'); toast('Counter reset'); render(); }
 
 function wipe(){
-  if(!confirm('Clear your repo settings and token from this device?')) return;
+  openSheet(`<h1 style="font-size:22px">Clear this device?</h1>
+    <p class="sub">Removes your repo settings and token from local storage. Nothing in your vault
+    is touched — this only affects this phone.</p>
+    <button class="btn danger" style="margin-top:18px" onclick="confirmWipe()">Clear settings</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+function confirmWipe(){
   localStorage.removeItem(CFG_KEY); localStorage.removeItem(CACHE_KEY);
   localStorage.removeItem('lifeos.spend');
-  DATA = null; CHAT = []; PENDING = []; toast('Cleared'); render();
+  DATA = null; CHAT = []; PENDING = [];
+  closeSheet(); toast('Cleared'); render();
 }
 
 /* ============================ push ============================ */
@@ -2212,6 +2284,30 @@ async function enablePush(){
     await putFile(path, JSON.stringify(list, null, 2) + '\n', 'Register push device', sha);
     toast('Notifications on — reminders will arrive on schedule');
   } catch(e){ toast('Push failed: ' + e.message); }
+}
+
+async function disablePush(){
+  if(!('serviceWorker' in navigator)) return toast('Nothing to disable here.');
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if(!sub) return toast('Notifications were not enabled on this device.');
+    const endpoint = sub.endpoint;
+    await sub.unsubscribe();
+    try {
+      const path = vpath('90 System/push/subscriptions.json');
+      const cur = await getFile(path);
+      if(cur){
+        let list = [];
+        try { list = JSON.parse(cur.text); } catch(e){ list = []; }
+        const next = list.filter(s => s.endpoint !== endpoint);
+        if(next.length !== list.length){
+          await putFile(path, JSON.stringify(next, null, 2) + '\n', 'Unregister push device', cur.sha);
+        }
+      }
+    } catch(e){ /* unsubscribed locally regardless; a dead endpoint prunes itself server-side on the next send */ }
+    toast('Notifications off on this device');
+  } catch(e){ toast('Failed: ' + e.message); }
 }
 
 /* ============================ pull to refresh ============================ */

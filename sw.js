@@ -1,6 +1,6 @@
 /* LifeOS service worker — offline shell + web push */
 
-const CACHE = 'lifeos-v1';
+const CACHE = 'lifeos-v2';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -16,10 +16,29 @@ self.addEventListener('activate', e => {
 });
 
 /* Never cache GitHub API calls — always hit the network, fail cleanly when offline.
-   Everything else: cache first, refresh in the background. */
+   The app shell (index.html, or any navigation) is network-first: this app changes
+   often, and a stale cached copy served ahead of a fresh one means every deploy
+   needs a manual force-reload to actually see. Fall back to cache only when the
+   network truly fails. Everything else (icons, manifest) stays cache-first,
+   refreshed in the background — those rarely change and benefit from being instant. */
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (url.hostname === 'api.github.com' || e.request.method !== 'GET') return;
+
+  const isShell = e.request.mode === 'navigate' || url.pathname.endsWith('/index.html');
+  if (isShell) {
+    e.respondWith(
+      fetch(e.request).then(res => {
+        if (res && res.status === 200) {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, copy));
+        }
+        return res;
+      }).catch(() => caches.match(e.request))
+    );
+    return;
+  }
+
   e.respondWith(
     caches.match(e.request).then(hit => {
       const net = fetch(e.request).then(res => {
