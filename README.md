@@ -6,9 +6,13 @@ private GitHub repo.
 
 No server, no account, no subscription. Hosted free on GitHub Pages.
 
-**Setup lives in one place: `SETUP.md` in the vault repo.** Everything from an empty
-machine to a working system, including deploying this app, is there. Don't follow
-instructions from anywhere else — there isn't anywhere else.
+This repo is public because free GitHub Pages hosting requires it — it holds only
+code and icons, no personal data. It's one half of a two-repo system; the other
+half is a private vault repo holding the actual data, which (being private) isn't
+visible from here. **The setup guide, `SETUP.md`, lives in that private vault
+repo** — if you've found this page without already having access to it, this app
+is the frontend for one person's private data store, not a general-purpose tool
+you can point at your own vault by just cloning this.
 
 ## Files
 
