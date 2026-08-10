@@ -214,15 +214,19 @@ const EXEMPTION_LABELS = { holiday:'Holiday', day_off:'Day off', event:'Event' }
 const $ = s => document.querySelector(s);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, m =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-const money = n => { const s = '$' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-  return cfg().guestMode ? s.replace(/\d/g,'X') : s; };
-const money0 = n => { const s = '$' + Math.round(Number(n)||0).toLocaleString('en-US');
-  return cfg().guestMode ? s.replace(/\d/g,'X') : s; };
+// Guest mode masks the digits AND strips any +/- sign — a bare minus on a
+// masked amount ($-XXX.XX) still tells a bystander "this one's negative",
+// which is exactly the cue guest mode exists to hide.
+const guestMask = s => cfg().guestMode ? s.replace(/[-+]/g,'').replace(/\d/g,'X') : s;
+const money = n => guestMask('$' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}));
+const money0 = n => guestMask('$' + Math.round(Number(n)||0).toLocaleString('en-US'));
 /* guest mode also strips the color/±-cues that hint whether a masked amount was
    good or bad news — finClass keeps the class only when guest mode is off,
-   finSign does the same for a leading +/▲/▼ style marker */
+   finSign does the same for a leading +/▲/▼ style marker, pctMask obfuscates
+   a comparison percentage the same way money() obfuscates a dollar amount */
 const finClass = cls => cfg().guestMode ? '' : cls;
 const finSign = (cond, sign='+') => (cond && !cfg().guestMode) ? sign : '';
+const pctMask = n => { const s = Math.abs(n).toFixed(0) + '%'; return cfg().guestMode ? s.replace(/\d/g,'X') : s; };
 const todayISO = () => { const d=new Date(); return new Date(d.getTime()-d.getTimezoneOffset()*6e4).toISOString().slice(0,10); };
 const b64 = str => { const b=new TextEncoder().encode(str); let s=''; b.forEach(x=>s+=String.fromCharCode(x)); return btoa(s); };
 const unb64 = s => new TextDecoder().decode(Uint8Array.from(atob(String(s).replace(/\s/g,'')), c=>c.charCodeAt(0)));
@@ -1745,7 +1749,7 @@ function viewMoney(){
   h += `<div class="grid">
     <div class="stat"><div class="l">This month</div><div class="n">${money0(m.spent_month)}</div>
       ${delta===null?'':`<div class="s ${finClass(delta>0?'bad':'good')}" style="font-size:12px;margin-top:4px">
-      ${cfg().guestMode?'':(delta>0?'▲':'▼')+' '}${Math.abs(delta).toFixed(0)}% vs last month</div>`}</div>
+      ${cfg().guestMode?'':(delta>0?'▲':'▼')+' '}${pctMask(delta)} vs last month</div>`}</div>
     <div class="stat"><div class="l">Income, month</div><div class="n ${finClass('good')}">${money0(m.income_month)}</div></div>
     <div class="stat"><div class="l">Assets</div><div class="n">${money0(m.assets)}</div></div>
     <div class="stat"><div class="l">Debts</div><div class="n ${finClass(m.debts>0?'bad':'')}">${money0(m.debts)}</div></div>
