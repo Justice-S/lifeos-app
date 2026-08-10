@@ -18,12 +18,25 @@
   --safe-top:env(safe-area-inset-top); --safe-bot:env(safe-area-inset-bottom);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;height:100%}
+/* html/body are a fixed-height frame, never the scrolling element — #app is.
+   Without this, a content-heavy tab (Settings, with its per-day schedule
+   cards) grows the whole document taller than a short one (Today), and
+   switching between them visibly changes the page height and resets
+   mobile Safari's chrome-collapse state every time. #app owning its own
+   scroll keeps the frame — and the fixed nav bar inside it — a constant
+   height no matter which tab is showing. */
+html,body{margin:0;height:100%;overflow:hidden}
 body{
   background:var(--bg); color:var(--text); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   overscroll-behavior-y:none;
 }
-#app{padding:calc(var(--safe-top) + 8px) 16px calc(var(--safe-bot) + 84px);max-width:640px;margin:0 auto}
+#app{
+  height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;
+  padding:calc(var(--safe-top) + 8px) 16px calc(var(--safe-bot) + 84px);max-width:640px;margin:0 auto;
+}
+/* Set while a sheet is open (see openSheet/closeSheet) so the page behind
+   it can't be scrolled at the same time as the sheet's own content. */
+#app.locked{overflow:hidden}
 h1{font-size:26px;margin:4px 0 2px;letter-spacing:-.5px}
 h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);margin:26px 0 10px;font-weight:600}
 .sub{color:var(--dim);font-size:14px;margin:0 0 4px}
@@ -1468,6 +1481,32 @@ function ensureReminderConfig(){
   });
 }
 
+/* ---- Settings → Usage: self-estimated GitHub Actions minutes ---- */
+// Same lazy-load-then-render pattern as ensureReminderConfig — this file is
+// written by track_actions_usage.py (see the workflows), read-only from here.
+
+const ACTIONS_USAGE_PATH = '90 System/push/actions_usage.json';
+let ACTIONS_USAGE = null, actionsUsagePromise = null;
+
+function ensureActionsUsage(){
+  if(ACTIONS_USAGE || actionsUsagePromise) return;
+  actionsUsagePromise = (async () => {
+    let data = {};
+    try {
+      const f = await getFile(vpath(ACTIONS_USAGE_PATH));
+      if(f) data = JSON.parse(f.text);
+    } catch(e){ /* not synced yet, or the file doesn't exist — show nothing rather than error */ }
+    ACTIONS_USAGE = data; actionsUsagePromise = null; render();
+  })();
+}
+
+function formatBytes(n){
+  if(!n) return '0 B';
+  if(n < 1024) return n + ' B';
+  if(n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
 const REMINDER_ANCHORS = ['wake','sleep','work_start','work_end','fixed'];
 const ANCHOR_LABELS = { wake:'Wake', sleep:'Sleep', work_start:'Start work', work_end:'End work', fixed:'Fixed time' };
 const REMINDER_FREQS = ['daily','weekdays','weekends','weekly','off'];
@@ -2101,7 +2140,49 @@ function viewSettings(){
     <p class="sub" style="margin:14px 0 0">LifeOS writes plain markdown to your own repo. Nothing is sent
     anywhere else — no analytics, no server, no account. Delete the app and your data is still yours.</p>
     <button class="btn danger" style="margin-top:12px" onclick="wipe()">Clear settings on this device</button>
-  </div>`);
+  </div>`) +
+
+  collapsible('usage', 'Usage', renderUsageSection());
+}
+
+function renderUsageSection(){
+  ensureActionsUsage();
+  const s = spend();
+  const au = ACTIONS_USAGE;
+  const vs = DATA && DATA.vault_stats;
+
+  let h = `<div class="card">
+    <div class="row"><span class="sub">Claude spend, all time</span>
+      <span class="sub">$${s.usd.toFixed(3)} over ${s.turns} turns</span></div>
+    <p class="sub" style="margin-top:4px">Reset the counter under Voice updates above.</p>
+  </div>`;
+
+  h += `<div class="card" style="margin-top:10px">`;
+  if(au === null){
+    h += `<span class="sub">Loading…</span>`;
+  } else {
+    const minutes = au.minutes || 0;
+    const pct = Math.round(minutes / 2000 * 100);
+    const barPct = Math.min(100, pct);
+    h += `<div class="row"><span class="sub">GitHub Actions minutes, this period</span>
+      <span class="sub ${au.paused ? 'bad' : ''}">${minutes} / 2000 (${pct}%)</span></div>
+      <div class="bar" style="margin-top:8px"><i style="width:${barPct}%${au.paused ? ';background:var(--bad)' : ''}"></i></div>`;
+    if(au.paused){
+      h += `<p class="sub" style="margin-top:8px;color:var(--bad)">Reminders are paused for the rest of
+      this period — usage crossed 80% of the free allowance. They resume automatically once a new
+      period starts under the threshold; nothing else here is affected.</p>`;
+    }
+    h += `<p class="sub" style="margin-top:8px">Self-estimated — GitHub doesn't expose real usage
+    without a billing-scoped token, which this app deliberately doesn't request. A guide, not a bill;
+    resets on the 1st. Check github.com → Settings → Billing for the real number.</p>`;
+  }
+  h += `</div>`;
+
+  h += `<div class="card" style="margin-top:10px">
+    <div class="row"><span class="sub">Vault size</span>
+      <span class="sub">${vs ? `${formatBytes(vs.size_bytes)} · ${vs.note_count} notes` : '—'}</span></div>
+  </div>`;
+  return h;
 }
 
 function toggleGuestMode(){ saveCfg({guestMode: !cfg().guestMode}); render(); }
@@ -2116,7 +2197,7 @@ function render(){
   DAYREFS = [];
   $('#app').innerHTML = (VIEWS[view] || viewToday)();
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
-  window.scrollTo(0,0);
+  $('#app').scrollTop = 0; // #app is the scrolling element now, not window — see its CSS rule
   if(view === 'settings') queueAll().then(q =>
     { const n = $('#queueInfo'); if(n) n.textContent = q.length ? `${q.length} entries waiting to upload.` : 'Nothing waiting to upload.'; });
 }
@@ -2124,8 +2205,11 @@ function go(v){ view = v; render(); }
 
 /* ============================ sheets ============================ */
 
-function openSheet(html){ $('#sheetBody').innerHTML = `<div class="handle"></div>` + html; $('#sheet').classList.add('on'); }
-function closeSheet(){ $('#sheet').classList.remove('on'); }
+// .locked survives render()'s innerHTML swap (that only replaces #app's
+// children, not the element itself), so the page behind a sheet stays
+// non-scrollable across any re-render that happens while it's open.
+function openSheet(html){ $('#sheetBody').innerHTML = `<div class="handle"></div>` + html; $('#sheet').classList.add('on'); $('#app').classList.add('locked'); }
+function closeSheet(){ $('#sheet').classList.remove('on'); $('#app').classList.remove('locked'); }
 // Tapping the backdrop goes through the same "did you mean to lose this?"
 // gate as the swipe gesture below, instead of silently discarding.
 $('#sheet').addEventListener('click', e => { if(e.target.id === 'sheet') attemptCloseSheet(); });
@@ -2687,7 +2771,7 @@ async function disablePush(){
   const app = $('#app'), ind = $('#pull');
   let startY = 0, pulling = false, dragging = false, busy = false;
 
-  const atTop = () => (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
+  const atTop = () => app.scrollTop <= 0; // #app is the scrolling element now, not window
 
   function setDist(px){
     app.style.transform = px ? `translateY(${px}px)` : '';
