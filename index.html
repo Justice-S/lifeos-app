@@ -18,20 +18,28 @@
   --safe-top:env(safe-area-inset-top); --safe-bot:env(safe-area-inset-bottom);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-/* html/body are a fixed-height frame, never the scrolling element — #app is.
-   Without this, a content-heavy tab (Settings, with its per-day schedule
-   cards) grows the whole document taller than a short one (Today), and
-   switching between them visibly changes the page height and resets
-   mobile Safari's chrome-collapse state every time. #app owning its own
-   scroll keeps the frame — and the fixed nav bar inside it — a constant
-   height no matter which tab is showing. */
-html,body{margin:0;height:100%;overflow:hidden}
+/* #app owns its own scroll (not body/html) so a content-heavy tab like
+   Settings doesn't grow the whole document taller than a short one like
+   Today — that's what kept the page height and the fixed nav bar's
+   position consistent across tabs. Deliberately NOT paired with
+   overflow:hidden on html/body, though: that combination is a known iOS
+   Safari bug (position:fixed elements end up placed against a stale
+   viewport once the page itself is marked non-scrollable, since Safari
+   stops collapsing its own toolbar) — it's what put visible daylight
+   under the bottom nav bar on every tab instead of the intended fix.
+   #app's own fixed height plus its internal overflow-y:auto already caps
+   how tall body ever gets — that alone is enough; body doesn't also need
+   to be locked down, and doing so is exactly what broke it. 100dvh
+   (dynamic viewport height — accounts for the toolbar directly) is the
+   more correct unit for this than 100%/100vh where it's supported; the
+   100% above it is the fallback for browsers that aren't. */
+html,body{margin:0;height:100%}
 body{
   background:var(--bg); color:var(--text); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   overscroll-behavior-y:none;
 }
 #app{
-  height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;
+  height:100%;height:100dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;
   padding:calc(var(--safe-top) + 8px) 16px calc(var(--safe-bot) + 84px);max-width:640px;margin:0 auto;
 }
 /* Set while a sheet is open (see openSheet/closeSheet) so the page behind
