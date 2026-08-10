@@ -138,6 +138,19 @@ textarea{min-height:88px;resize:vertical}
 .streak-badge{flex:none;background:var(--panel);border:1px solid var(--line);border-radius:20px;
   padding:8px 14px;font-size:13px;white-space:nowrap}
 .streak-badge b{color:var(--accent)}
+/* ---- collapsible sections (settings, chore categories) ---- */
+.collapse{margin-bottom:2px}
+.collapse-head{display:flex;justify-content:space-between;align-items:center;width:100%;
+  padding:4px 2px;margin:26px 0 10px;background:none;text-align:left}
+.collapse-head .t{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);font-weight:600}
+.collapse-head .t2{font-size:12px;color:var(--dim);margin-left:8px;text-transform:none;letter-spacing:0;font-weight:400}
+.collapse-head .chev{color:var(--dim);font-size:11px;transition:transform .15s;display:inline-block}
+.collapse.open>.collapse-head .chev{transform:rotate(90deg)}
+.collapse-body{display:none}
+.collapse.open>.collapse-body{display:block}
+.filter-bar{margin-bottom:14px}
+.filter-bar label{margin:10px 0 6px}
+.filter-bar label:first-child{margin-top:0}
 </style>
 </head>
 <body>
@@ -173,7 +186,8 @@ textarea{min-height:88px;resize:vertical}
 const CFG_KEY = 'lifeos.cfg';
 const CACHE_KEY = 'lifeos.summary';
 const DEFAULTS = { owner:'', repo:'', branch:'main', token:'', vaultPath:'', vapid:'',
-  anthropicKey:'', model:'claude-haiku-4-5-20251001', weeklyModel:'claude-sonnet-4-6', depth:'gaps' };
+  anthropicKey:'', model:'claude-haiku-4-5-20251001', weeklyModel:'claude-sonnet-4-6', depth:'gaps',
+  guestMode:false };
 
 function cfg(){ try { return {...DEFAULTS, ...JSON.parse(localStorage.getItem(CFG_KEY)||'{}')}; }
               catch(e){ return {...DEFAULTS}; } }
@@ -189,6 +203,7 @@ const CATEGORIES = ['Groceries','Dining','Transport','Housing','Utilities','Heal
 const ACTIVITIES = ['Lifting','Run','Walk','Cycle','Swim','Yoga','Climb','Sport','Mobility','Other'];
 const INTENSITY = ['easy','moderate','hard','max'];
 const CHORE_CATEGORIES = ['home','pets','admin'];
+const CHORE_CATEGORY_LABELS = { home:'Home', pets:'Pets', admin:'Admin' };
 const CHORE_FREQS = ['daily','weekly','monthly','every_n_days'];
 const CHORE_FREQ_LABELS = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', every_n_days:'X Days' };
 const EXEMPTION_KINDS = ['holiday','day_off','event'];
@@ -199,8 +214,15 @@ const EXEMPTION_LABELS = { holiday:'Holiday', day_off:'Day off', event:'Event' }
 const $ = s => document.querySelector(s);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, m =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-const money = n => '$' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-const money0 = n => '$' + Math.round(Number(n)||0).toLocaleString('en-US');
+const money = n => { const s = '$' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  return cfg().guestMode ? s.replace(/\d/g,'X') : s; };
+const money0 = n => { const s = '$' + Math.round(Number(n)||0).toLocaleString('en-US');
+  return cfg().guestMode ? s.replace(/\d/g,'X') : s; };
+/* guest mode also strips the color/±-cues that hint whether a masked amount was
+   good or bad news — finClass keeps the class only when guest mode is off,
+   finSign does the same for a leading +/▲/▼ style marker */
+const finClass = cls => cfg().guestMode ? '' : cls;
+const finSign = (cond, sign='+') => (cond && !cfg().guestMode) ? sign : '';
 const todayISO = () => { const d=new Date(); return new Date(d.getTime()-d.getTimezoneOffset()*6e4).toISOString().slice(0,10); };
 const b64 = str => { const b=new TextEncoder().encode(str); let s=''; b.forEach(x=>s+=String.fromCharCode(x)); return btoa(s); };
 const unb64 = s => new TextDecoder().decode(Uint8Array.from(atob(String(s).replace(/\s/g,'')), c=>c.charCodeAt(0)));
@@ -1135,6 +1157,49 @@ async function tickChore(i, btn){
   }
 }
 
+/* ---- chores: filter by subject / location / frequency ---- */
+// Values are re-populated on every render() (same lifecycle as CHOREREFS)
+// and clicked by index, so free-text areas never need to survive an
+// onclick-attribute round trip.
+let CHORE_FILTER = { category:'all', area:'all', freq:'all' };
+let CHORE_FILTER_OPTS = { category:[], area:[], freq:[] };
+
+function choreFilterActive(){
+  return CHORE_FILTER.category!=='all' || CHORE_FILTER.area!=='all' || CHORE_FILTER.freq!=='all';
+}
+function choreMatchesFilter(c){
+  if(CHORE_FILTER.category!=='all' && c.category !== CHORE_FILTER.category) return false;
+  if(CHORE_FILTER.area!=='all' && (c.area||'') !== CHORE_FILTER.area) return false;
+  if(CHORE_FILTER.freq!=='all' && c.frequency !== CHORE_FILTER.freq) return false;
+  return true;
+}
+function setChoreFilterIdx(kind, idx){ CHORE_FILTER[kind] = CHORE_FILTER_OPTS[kind][idx]; render(); }
+function clearChoreFilters(){ CHORE_FILTER = {category:'all', area:'all', freq:'all'}; render(); }
+
+function choreFilterChips(kind, opts, labelFor, sel){
+  CHORE_FILTER_OPTS[kind] = opts;
+  return `<div class="chips">` + opts.map((v,i) =>
+    `<button type="button" class="chip ${v===sel?'on':''}" onclick="setChoreFilterIdx('${kind}',${i})">
+      ${esc(labelFor(v))}</button>`).join('') + `</div>`;
+}
+
+function renderChoreFilters(ch){
+  const areas = [...new Set((ch.all||[]).map(c => c.area).filter(Boolean))].sort();
+  const active = choreFilterActive();
+  const body = `<div class="filter-bar">
+    <label>Subject</label>
+    ${choreFilterChips('category', ['all', ...CHORE_CATEGORIES],
+      v => v==='all' ? 'All' : (CHORE_CATEGORY_LABELS[v]||v), CHORE_FILTER.category)}
+    ${areas.length ? `<label>Location</label>
+    ${choreFilterChips('area', ['all', ...areas], v => v==='all' ? 'All' : v, CHORE_FILTER.area)}` : ''}
+    <label>Frequency</label>
+    ${choreFilterChips('freq', ['all', ...CHORE_FREQS],
+      v => v==='all' ? 'All' : (CHORE_FREQ_LABELS[v]||v), CHORE_FILTER.freq)}
+    ${active ? `<button class="btn sec" style="margin-top:12px" onclick="clearChoreFilters()">Clear filters</button>` : ''}
+  </div>`;
+  return collapsible('chorefilters', 'Filters', body, {subtitle: active ? 'active' : ''});
+}
+
 function viewChores(){
   const d = DATA;
   let h = header('Chores', d && d.chores ? `${d.chores.due_count} due` : '');
@@ -1142,27 +1207,38 @@ function viewChores(){
   if(!d || !d.chores) return h + `<div class="empty">No chore data yet. Pull to refresh.</div>`;
   const ch = d.chores;
 
-  if(ch.pets && ch.pets.length){
+  h += renderChoreFilters(ch);
+  const showPets = CHORE_FILTER.category === 'all' || CHORE_FILTER.category === 'pets';
+
+  if(showPets && ch.pets && ch.pets.length){
     h += `<h2>Pets</h2>`;
     if(ch.pets_clear){
       h += `<div class="card"><div class="row"><b class="good">All set</b>
         <span class="sub">fed, watered, litter done</span></div></div>`;
     } else {
-      h += `<div class="list">` + ch.pets_due.map(c => choreRow(c, choreRef(c))).join('') + `</div>`;
+      h += `<div class="list">` + ch.pets_due.filter(choreMatchesFilter).map(c => choreRow(c, choreRef(c))).join('') + `</div>`;
     }
-    const petsDone = ch.pets.filter(c => !c.due);
+    const petsDone = ch.pets.filter(c => !c.due && choreMatchesFilter(c));
     if(petsDone.length && !ch.pets_clear){
       h += `<p class="sub" style="margin-top:8px">Done: ${petsDone.map(c => esc(c.name)).join(', ')}</p>`;
     }
   }
 
-  const rest = (ch.due || []).filter(c => c.category !== 'pets');
+  const rest = (ch.due || []).filter(c => c.category !== 'pets' && choreMatchesFilter(c));
   h += `<h2>Due${rest.length ? '' : ' — nothing else'}</h2>`;
-  h += rest.length
-    ? `<div class="list">` + rest.map(c => choreRow(c, choreRef(c))).join('') + `</div>`
-    : `<div class="card"><span class="sub">Everything else is done. Go and enjoy that.</span></div>`;
+  if(!rest.length){
+    h += `<div class="card"><span class="sub">${choreFilterActive()
+      ? 'Nothing due matches these filters.' : 'Everything else is done. Go and enjoy that.'}</span></div>`;
+  } else {
+    const groups = CHORE_CATEGORIES.filter(cat => cat !== 'pets')
+      .map(cat => ({cat, items: rest.filter(c => c.category === cat)}))
+      .filter(g => g.items.length);
+    h += groups.map(g => collapsible(`chorecat:${g.cat}`, CHORE_CATEGORY_LABELS[g.cat] || g.cat,
+      `<div class="list">` + g.items.map(c => choreRow(c, choreRef(c))).join('') + `</div>`,
+      {subtitle: String(g.items.length)})).join('');
+  }
 
-  const notDue = (ch.all || []).filter(c => !c.due);
+  const notDue = (ch.all || []).filter(c => !c.due && (showPets || c.category !== 'pets') && choreMatchesFilter(c));
   if(notDue.length){
     h += `<h2>Done, and when it comes back</h2><div class="list">` + notDue.map(c => { const i = choreRef(c);
       return `<div class="item">
@@ -1610,7 +1686,7 @@ function viewToday(){
     h += `<h2>Latest transactions</h2><div class="list">` + recent.map(t =>
       `<div class="item"><div><div class="m">${esc(t.merchant)}</div>
        <div class="s">${esc(t.category)} · ${esc(t.date)}</div></div>
-       <div class="amt ${t.direction==='income'?'good':''}">${t.direction==='income'?'+':''}${money(t.amount)}</div></div>`
+       <div class="amt ${finClass(t.direction==='income'?'good':'')}">${finSign(t.direction==='income')}${money(t.amount)}</div></div>`
     ).join('') + `</div>`;
   }
   const wr = (d.fitness.recent||[]).slice(0,4);
@@ -1636,7 +1712,7 @@ function paycheckCard(m){
       const off = last.variable_pay > 0 ? 'above' : last.shortfall > 0 ? 'below' : 'on';
       const amt = last.variable_pay > 0 ? last.variable_pay : last.shortfall;
       h += `<div class="row" style="margin-top:8px"><span class="sub">Last, ${esc(last.date)}</span>
-        <span class="amt ${off==='below'?'bad':off==='above'?'good':''}">${money(last.net)}</span></div>`;
+        <span class="amt ${finClass(off==='below'?'bad':off==='above'?'good':'')}">${money(last.net)}</span></div>`;
       if(off !== 'on'){
         h += `<p class="sub" style="margin:8px 0 0">${money(amt)} ${off} baseline${
           off==='above' ? ' — recorded as bonus or commission.' : ' — worth checking the stub.'}</p>`;
@@ -1644,7 +1720,7 @@ function paycheckCard(m){
     }
     if(m.variable_pay_ytd > 0){
       h += `<div class="row" style="margin-top:8px"><span class="sub">Variable pay this year</span>
-        <span class="amt good">${money(m.variable_pay_ytd)}</span></div>`;
+        <span class="amt ${finClass('good')}">${money(m.variable_pay_ytd)}</span></div>`;
     }
   }
   const short = (m.payroll_flags||[]).filter(f => f.kind === 'shortfall');
@@ -1668,11 +1744,11 @@ function viewMoney(){
   const delta = m.spent_prev_month ? ((m.spent_month - m.spent_prev_month)/m.spent_prev_month*100) : null;
   h += `<div class="grid">
     <div class="stat"><div class="l">This month</div><div class="n">${money0(m.spent_month)}</div>
-      ${delta===null?'':`<div class="s ${delta>0?'bad':'good'}" style="font-size:12px;margin-top:4px">
-      ${delta>0?'▲':'▼'} ${Math.abs(delta).toFixed(0)}% vs last month</div>`}</div>
-    <div class="stat"><div class="l">Income, month</div><div class="n good">${money0(m.income_month)}</div></div>
+      ${delta===null?'':`<div class="s ${finClass(delta>0?'bad':'good')}" style="font-size:12px;margin-top:4px">
+      ${cfg().guestMode?'':(delta>0?'▲':'▼')+' '}${Math.abs(delta).toFixed(0)}% vs last month</div>`}</div>
+    <div class="stat"><div class="l">Income, month</div><div class="n ${finClass('good')}">${money0(m.income_month)}</div></div>
     <div class="stat"><div class="l">Assets</div><div class="n">${money0(m.assets)}</div></div>
-    <div class="stat"><div class="l">Debts</div><div class="n ${m.debts>0?'bad':''}">${money0(m.debts)}</div></div>
+    <div class="stat"><div class="l">Debts</div><div class="n ${finClass(m.debts>0?'bad':'')}">${money0(m.debts)}</div></div>
   </div>`;
   h += `<button class="btn" style="margin:12px 0" onclick="sheetExpense()">Log an expense</button>`;
   if(m.categories && m.categories.length){
@@ -1687,7 +1763,7 @@ function viewMoney(){
     h += `<h2>Accounts</h2><div class="list">` + m.accounts.map(a =>
       `<div class="item"><div><div class="m">${esc(a.name)}</div>
        <div class="s">${esc(a.institution||a.kind)} · ${a.last_synced ? 'synced '+esc(a.last_synced) : 'never synced'}</div></div>
-       <div class="amt ${a.kind==='credit'||a.kind==='loan'?'bad':''}">${money(a.balance)}</div></div>`
+       <div class="amt ${finClass(a.kind==='credit'||a.kind==='loan'?'bad':'')}">${money(a.balance)}</div></div>`
     ).join('') + `</div>`;
   }
   h += paycheckCard(m);
@@ -1699,7 +1775,7 @@ function viewMoney(){
     h += `<h2>All recent</h2><div class="list">` + m.recent.slice(0,30).map(t =>
       `<div class="item"><div><div class="m">${esc(t.merchant)}</div>
        <div class="s">${esc(t.category)} · ${esc(t.account||'')} · ${esc(t.date)}</div></div>
-       <div class="amt ${t.direction==='income'?'good':''}">${t.direction==='income'?'+':''}${money(t.amount)}</div></div>`
+       <div class="amt ${finClass(t.direction==='income'?'good':'')}">${finSign(t.direction==='income')}${money(t.amount)}</div></div>`
     ).join('') + `</div>`;
   }
   return h;
@@ -1799,7 +1875,8 @@ function viewLife(){
 function viewSettings(){
   const c = cfg();
   ensureReminderConfig();
-  return header('Settings','Everything is stored on this device only') + `
+  return header('Settings','Everything is stored on this device only') +
+  collapsible('connection', 'Connection', `
   <div class="card">
     <label>GitHub username</label><input id="s_owner" value="${esc(c.owner)}" autocapitalize="off" autocorrect="off">
     <label>Vault repo name</label><input id="s_repo" value="${esc(c.repo)}" autocapitalize="off" autocorrect="off" placeholder="lifeos-vault">
@@ -1811,16 +1888,16 @@ function viewSettings(){
     It never leaves your phone.</p>
     <button class="btn" style="margin-top:12px" onclick="saveSettings()">Save</button>
     <button class="btn sec" style="margin-top:8px" onclick="testConn()">Test connection</button>
-  </div>
+  </div>`) +
 
-  <h2>Data</h2>
+  collapsible('data', 'Data', `
   <div class="card">
     <button class="btn sec" onclick="refresh(true)">Refresh from vault</button>
     <button class="btn sec" style="margin-top:8px" onclick="syncNow()">Push queued entries</button>
     <p class="sub" id="queueInfo" style="margin-top:10px"></p>
-  </div>
+  </div>`) +
 
-  <h2>Voice updates</h2>
+  collapsible('voice', 'Voice updates', `
   <div class="card">
     <label>Claude API key</label>
     <input id="s_akey" type="password" value="${esc(c.anthropicKey)}" autocapitalize="off" autocorrect="off" placeholder="sk-ant-...">
@@ -1844,9 +1921,9 @@ function viewSettings(){
     <p class="sub" style="margin-top:10px">Estimates assume Haiku and one session a day; Sonnet is
     roughly three times each figure. Set a monthly spend limit on your Anthropic console so a runaway
     session can't surprise you. The key stays on this device.</p>
-  </div>
+  </div>`) +
 
-  <h2>Notifications</h2>
+  collapsible('notifications', 'Notifications', `
   <div class="card">
     <label>VAPID public key</label>
     <input id="s_vapid" value="${esc(c.vapid)}" autocapitalize="off" autocorrect="off" placeholder="BN...">
@@ -1856,18 +1933,29 @@ function viewSettings(){
     <button class="btn sec" style="margin-top:8px" onclick="disablePush()">Disable notifications</button>
     <p class="sub" style="margin-top:10px">On iPhone this only works once the app is installed to your
     home screen from Safari's Share menu.</p>
-  </div>
+  </div>`) +
 
-  <h2>Schedule</h2>
-  ${renderScheduleSection()}
+  collapsible('schedule', 'Schedule', renderScheduleSection()) +
 
-  <h2>About</h2>
+  collapsible('privacy', 'Privacy', `
   <div class="card">
-    <p class="sub" style="margin:0">LifeOS writes plain markdown to your own repo. Nothing is sent
+    <div class="row">
+      <div style="flex:1;padding-right:10px">
+        <b>Guest mode</b>
+        <p class="sub" style="margin:2px 0 0">Masks every dollar amount as $X.XX and drops the
+        green/red positive-or-negative cues, so the app can be shown to someone else without
+        exposing real numbers.</p>
+      </div>
+      <button class="tick ${c.guestMode?'on':''}" style="width:44px;height:28px;border-radius:14px"
+        onclick="toggleGuestMode()">${c.guestMode?'On':'Off'}</button>
+    </div>
+    <p class="sub" style="margin:14px 0 0">LifeOS writes plain markdown to your own repo. Nothing is sent
     anywhere else — no analytics, no server, no account. Delete the app and your data is still yours.</p>
     <button class="btn danger" style="margin-top:12px" onclick="wipe()">Clear settings on this device</button>
-  </div>`;
+  </div>`);
 }
+
+function toggleGuestMode(){ saveCfg({guestMode: !cfg().guestMode}); render(); }
 
 const VIEWS = { today:viewToday, chores:viewChores, talk:viewTalk, money:viewMoney, fitness:viewFitness,
   life:viewLife, calendar:viewCalendar, settings:viewSettings };
@@ -1977,6 +2065,29 @@ function discardAndCloseSheet(){
   $('#closeConfirm').classList.remove('on');
   settleSheetDrag(0);
   closeSheet();
+}
+
+/* ---- generic collapsible section ---- */
+// Open/closed state lives outside render() (same pattern as CAL_MODE) so it
+// survives the full innerHTML rebuild every render() does. Keyed by a caller
+// -chosen string, shared across settings sections and chore categories.
+// Settings sections start unseeded (closed); chore category groups are
+// seeded open below so grouping due chores doesn't hide them on first view.
+let OPEN_SECTIONS = new Set(['chorecat:home', 'chorecat:admin']);
+function toggleSection(key){
+  OPEN_SECTIONS.has(key) ? OPEN_SECTIONS.delete(key) : OPEN_SECTIONS.add(key);
+  render();
+}
+function collapsible(key, title, bodyHtml, opts={}){
+  const open = OPEN_SECTIONS.has(key);
+  const sub = opts.subtitle ? `<span class="t2">${esc(opts.subtitle)}</span>` : '';
+  return `<div class="collapse ${open?'open':''}">
+    <button class="collapse-head" onclick="toggleSection('${key}')">
+      <span><span class="t">${esc(title)}</span>${sub}</span>
+      <span class="chev">▸</span>
+    </button>
+    <div class="collapse-body">${bodyHtml}</div>
+  </div>`;
 }
 
 function chipRow(id, opts, sel, labels){
