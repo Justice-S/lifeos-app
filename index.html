@@ -186,7 +186,7 @@ textarea{min-height:88px;resize:vertical}
 const CFG_KEY = 'lifeos.cfg';
 const CACHE_KEY = 'lifeos.summary';
 const DEFAULTS = { owner:'', repo:'', branch:'main', token:'', vaultPath:'', vapid:'',
-  anthropicKey:'', model:'claude-haiku-4-5-20251001', weeklyModel:'claude-sonnet-4-6', depth:'gaps',
+  anthropicKey:'', model:'claude-haiku-4-5-20251001', depth:'gaps',
   guestMode:false };
 
 function cfg(){ try { return {...DEFAULTS, ...JSON.parse(localStorage.getItem(CFG_KEY)||'{}')}; }
