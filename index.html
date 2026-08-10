@@ -230,6 +230,135 @@ const CHORE_FREQ_LABELS = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', e
 const EXEMPTION_KINDS = ['holiday','day_off','event'];
 const EXEMPTION_LABELS = { holiday:'Holiday', day_off:'Day off', event:'Event' };
 
+/* ---- due-date notifications: shared by "Due dates" (Life tab) and,
+   eventually, chores. A notification is one of:
+     {kind:'offset', minutes, enabled}          -- N minutes before due_time
+     {kind:'anchor', anchor:'wake'|'sleep', mode:'piggyback'|'separate', enabled}
+   Stored in frontmatter as compact colon-separated tokens inside a bracketed
+   list (this vault's frontmatter parsers only understand flat strings and
+   string lists, never nested objects) -- mirrored in build_summary.py
+   (pass-through only) and 90 System/push/send.js (which actually fires
+   them). See 40 Life/Reminders/README.md for the token format written out
+   in full. */
+function parseNotificationToken(tok){
+  const parts = String(tok).split(':');
+  if(parts.length !== 4) return null;
+  const [kind, a, b, en] = parts;
+  const enabled = en === 'on';
+  if(kind === 'offset'){
+    const minutes = parseInt(a, 10);
+    return Number.isFinite(minutes) ? {kind:'offset', minutes, enabled} : null;
+  }
+  if(kind === 'anchor'){
+    if(!['wake','sleep'].includes(a) || !['piggyback','separate'].includes(b)) return null;
+    return {kind:'anchor', anchor:a, mode:b, enabled};
+  }
+  return null;
+}
+function formatNotificationToken(n){
+  return n.kind === 'offset'
+    ? `offset:${Math.max(30, Math.round((Number(n.minutes)||30)/30)*30)}:-:${n.enabled?'on':'off'}`
+    : `anchor:${n.anchor}:${n.mode}:${n.enabled?'on':'off'}`;
+}
+function parseNotifications(list){
+  return (Array.isArray(list) ? list : []).map(parseNotificationToken).filter(Boolean);
+}
+
+// Every half hour, "00:00".."23:30" -- the only grid send.js's 30-minute
+// poll can ever actually land a push on, so a due-time picker that allowed
+// anything finer would just be lying about precision it can't deliver.
+const HALF_HOUR_TIMES = (() => {
+  const out = [];
+  for(let m = 0; m < 1440; m += 30){
+    const h24 = Math.floor(m/60), mm = m%60;
+    const h12 = ((h24 + 11) % 12) + 1;
+    out.push({ value: `${String(h24).padStart(2,'0')}:${String(mm).padStart(2,'0')}`,
+               label: `${h12}:${String(mm).padStart(2,'0')} ${h24 < 12 ? 'AM' : 'PM'}` });
+  }
+  return out;
+})();
+function timeSelect(id, value){
+  // Re-renders on change (via setDueTime), not just updates the draft --
+  // whether "Before due" is even offered as a notification kind depends on
+  // a time being set (see renderDueSheet's NOTIF_EDITOR.allowOffset), so
+  // this needs to be a structural change like the recur toggle, not a
+  // silent draft update like the plain text inputs.
+  return `<select id="${id}" onchange="setDueTime(this.value)">
+    <option value="">No specific time</option>` +
+    HALF_HOUR_TIMES.map(t => `<option value="${t.value}" ${t.value===value?'selected':''}>${esc(t.label)}</option>`).join('') +
+    `</select>`;
+}
+function setDueTime(v){ DUE_DRAFT.due_time = v; renderDueSheet(); }
+
+/* Generic notification-row editor, driven entirely by NOTIF_EDITOR so any
+   sheet can embed it: set {list, allowOffset, onChange} then call
+   notifRowsHtml() while building that sheet's HTML. onChange re-renders
+   the whole sheet from the caller's own draft state (see sheetAddDue/
+   sheetEditDue) -- structural edits (add/remove/kind change) need that;
+   the offset-hours text input deliberately skips it (see setNotifOffsetHrs)
+   so typing doesn't lose focus on every keystroke. */
+let NOTIF_EDITOR = null;
+function notifRowsHtml(){
+  const e = NOTIF_EDITOR;
+  if(!e) return '';
+  const rows = e.list.map((n,i) => notifRowHtml(n,i)).join('');
+  return `<div class="list">${rows || '<div class="card"><span class="sub">None yet.</span></div>'}</div>
+    <button type="button" class="btn sec" style="margin-top:10px" onclick="addNotif()">+ Add a notification</button>`;
+}
+function notifRowHtml(n, i){
+  const e = NOTIF_EDITOR, isOffset = n.kind === 'offset';
+  return `<div class="card" style="margin-bottom:8px">
+    <div class="row">
+      <button type="button" class="tick ${n.enabled?'on':''}" onclick="toggleNotif(${i})" aria-label="enabled">${n.enabled?'✓':''}</button>
+      <div class="chips" style="flex:1;margin-left:8px">
+        ${e.allowOffset ? `<button type="button" class="chip ${isOffset?'on':''}" onclick="setNotifKind(${i},'offset')">Before due</button>` : ''}
+        <button type="button" class="chip ${!isOffset?'on':''}" onclick="setNotifKind(${i},'anchor')">Wake/Sleep</button>
+      </div>
+      <button type="button" class="btn sec" style="width:auto;padding:6px 10px;margin-left:8px" onclick="removeNotif(${i})">✕</button>
+    </div>
+    ${isOffset ? `
+      <label style="margin-top:8px">Hours before due</label>
+      <input type="text" inputmode="decimal" placeholder="e.g. 0.5" value="${n.minutes!=null ? n.minutes/60 : ''}"
+        oninput="setNotifOffsetHrs(${i}, this.value)">
+      <p class="sub" style="margin-top:4px">Locked to the half hour. Only fires the same day as the due
+      time — an offset larger than the time of day doesn't roll back to the day before, it just won't fire.</p>
+    ` : `
+      <div class="chips" style="margin-top:8px">
+        <button type="button" class="chip ${n.anchor==='wake'?'on':''}" onclick="setNotifAnchor(${i},'wake')">Wake-up</button>
+        <button type="button" class="chip ${n.anchor==='sleep'?'on':''}" onclick="setNotifAnchor(${i},'sleep')">Sleep</button>
+      </div>
+      <div class="chips" style="margin-top:8px">
+        <button type="button" class="chip ${n.mode==='piggyback'?'on':''}" onclick="setNotifMode(${i},'piggyback')">Include in that push</button>
+        <button type="button" class="chip ${n.mode==='separate'?'on':''}" onclick="setNotifMode(${i},'separate')">Send separately</button>
+      </div>
+      <p class="sub" style="margin-top:4px">"Include" only mentions this when your normal wake-up/sleep
+      push actually goes out that day; "Send separately" always fires its own, at the same time.</p>
+    `}
+  </div>`;
+}
+function addNotif(){
+  NOTIF_EDITOR.list.push(NOTIF_EDITOR.allowOffset
+    ? {kind:'offset', minutes:30, enabled:true}
+    : {kind:'anchor', anchor:'wake', mode:'piggyback', enabled:true});
+  NOTIF_EDITOR.onChange();
+}
+function removeNotif(i){ NOTIF_EDITOR.list.splice(i,1); NOTIF_EDITOR.onChange(); }
+function toggleNotif(i){ NOTIF_EDITOR.list[i].enabled = !NOTIF_EDITOR.list[i].enabled; NOTIF_EDITOR.onChange(); }
+function setNotifKind(i, kind){
+  const cur = NOTIF_EDITOR.list[i];
+  NOTIF_EDITOR.list[i] = kind === 'offset'
+    ? {kind:'offset', minutes: cur.minutes || 30, enabled: cur.enabled}
+    : {kind:'anchor', anchor: cur.anchor || 'wake', mode: cur.mode || 'piggyback', enabled: cur.enabled};
+  NOTIF_EDITOR.onChange();
+}
+function setNotifAnchor(i, a){ NOTIF_EDITOR.list[i].anchor = a; NOTIF_EDITOR.onChange(); }
+function setNotifMode(i, m){ NOTIF_EDITOR.list[i].mode = m; NOTIF_EDITOR.onChange(); }
+function setNotifOffsetHrs(i, raw){
+  const hrs = parseFloat(raw);
+  NOTIF_EDITOR.list[i].minutes = (isNaN(hrs) || hrs < 0) ? 30 : Math.max(30, Math.round(hrs*2)*30);
+  // deliberately no onChange() -- re-rendering on every keystroke would drop focus mid-type
+}
+
 /* ============================ tiny helpers ============================ */
 
 const $ = s => document.querySelector(s);
@@ -967,6 +1096,35 @@ async function saveAchievement(a){
   return write(path, body, `Achievement: ${a.title}`);
 }
 
+/* A one-off or recurring due date with its own notifications — see
+   40 Life/Reminders/README.md for the note format and DUE_DRAFT/
+   sheetAddDue() below for how the app builds one. Editing reuses the
+   original file path (like updateChore) so a title change doesn't also
+   silently rename/duplicate the note. */
+async function saveDueReminder(r){
+  const name = safeName(r.title);
+  if(!name) throw new Error('Needs a title');
+  const path = r.path ? vpath(r.path) : vpath(`40 Life/Reminders/${name}.md`);
+  const monthly = r.due_recur === 'monthly';
+  const body = fm({
+    type:'reminder', title:r.title,
+    due_date: monthly ? '' : (r.due_date || todayISO()),
+    due_recur: monthly ? 'monthly' : '',
+    due_day: monthly ? r.due_day : '',
+    due_time: r.due_time || '',
+    notifications: (r.notifications || []).map(formatNotificationToken),
+    active:true, tags:['reminder']
+  }) + `\n# ${name}\n\nAdded from the phone on ${todayISO()}.\n`;
+  return write(path, body, `${r.path ? 'Update' : 'Add'} due date: ${name}`, { mode:'update' });
+}
+
+async function deleteDueReminder(r){
+  if(!r.path) throw new Error('Nothing to delete');
+  const cur = await getFile(vpath(r.path));
+  if(!cur) throw new Error('Due date note missing');
+  return deleteFile(vpath(r.path), cur.sha, `Delete due date: ${r.title}`);
+}
+
 /* Holiday / day off / event — suppresses due-chores and push reminders for
    every date from start_date through end_date, inclusive. See update_chores.py
    and send.js, which both read these notes to decide what to skip.
@@ -1247,6 +1405,9 @@ function choreRow(c, i){
 
 let CHOREREFS = [];
 function choreRef(c){ CHOREREFS.push(c); return CHOREREFS.length - 1; }
+
+let DUEREFS = [];
+function dueRef(r){ DUEREFS.push(r); return DUEREFS.length - 1; }
 
 async function tickChore(i, btn){
   const c = CHOREREFS[i];
@@ -1879,6 +2040,21 @@ function choresStrip(){
     <div style="margin-top:2px">` + body + `</div></div>`;
 }
 
+function dueStrip(){
+  const due = ((DATA && DATA.life && DATA.life.reminders) || []).filter(r => r.due_today);
+  if(!due.length) return '';
+  return `<div class="card" style="margin-top:10px">
+    <div class="row"><b>Due today</b><span class="sub">${due.length}</span></div>
+    <div class="list" style="margin-top:10px">` + due.map(r => { const i = dueRef(r);
+      return `<div class="item">
+        <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+          onclick="sheetEditDue(${i})">
+          <div class="m">${esc(r.title)}</div>
+          <div class="s">${r.due_time ? esc(r.due_time) : 'No specific time'}${r.due_recur === 'monthly' ? ' · monthly' : ''}</div>
+        </button>
+      </div>`; }).join('') + `</div></div>`;
+}
+
 function viewToday(){
   const d = DATA;
   const day = new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
@@ -1887,6 +2063,7 @@ function viewToday(){
   h += `<button class="btn" style="margin:6px 0 12px" onclick="go('talk')">🎙️ Dictate today's update</button>`;
   h += nudges();
   h += choresStrip();
+  h += dueStrip();
   h += `<div class="quick">
     <button onclick="sheetExpense()"><span class="e">💵</span><span class="t">Log expense</span><span class="d">Tap, type, done</span></button>
     <button onclick="sheetWorkout()"><span class="e">🏃</span><span class="t">Log workout</span><span class="d">Activity + minutes</span></button>
@@ -2081,7 +2258,24 @@ function viewLife(){
   h += `<div class="row" style="gap:8px;margin-top:10px">
     <input id="lt_new" placeholder="Add a task">
     <button class="btn" style="width:auto;padding:13px 18px" onclick="submitAddTask(this)">Add</button>
-  </div>`;
+  </div>
+  <p class="sub" style="margin-top:8px">Need a due date, a specific time, or its own notifications?
+  <a href="#" onclick="sheetAddDue();return false">Add a due date</a> instead.</p>`;
+  const reminders = d.life.reminders || [];
+  h += `<h2>Due dates</h2>`;
+  h += reminders.length
+    ? `<div class="list">` + reminders.map(r => { const i = dueRef(r);
+        return `<div class="item">
+          <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+            onclick="sheetEditDue(${i})">
+            <div class="m">${esc(r.title)}</div>
+            <div class="s">${esc(r.due_recur === 'monthly' ? `Monthly, day ${r.due_day}` : r.next_date)}${
+              r.due_time ? ' · ' + esc(r.due_time) : ''}</div>
+          </button>
+          ${r.due_today ? '<span class="pill">today</span>' : ''}
+        </div>`; }).join('') + `</div>`
+    : `<div class="empty">Nothing due. Add one below.</div>`;
+  h += `<button class="btn sec" style="margin-top:10px" onclick="sheetAddDue()">Add a due date</button>`;
   if(d.life.days && d.life.days.length){
     h += `<h2>Recent days</h2><div class="list">` + d.life.days.slice(0,14).map(x => { const i = dayRef(x);
       return `<div class="item">
@@ -2236,6 +2430,7 @@ function render(){
   CHOREREFS = [];
   WORKOUTREFS = [];
   DAYREFS = [];
+  DUEREFS = [];
   $('#app').innerHTML = (VIEWS[view] || viewToday)();
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
   $('#app').scrollTop = 0; // #app is the scrolling element now, not window — see its CSS rule
@@ -2623,6 +2818,93 @@ async function submitGoal(btn, i){
       if(t){ t.current = value; t.percent = t.target ? +(value/t.target*100).toFixed(1) : null; } });
     closeSheet(); render(); toast('Progress saved');
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save progress'; }
+}
+
+/* ---- due dates ("Reminder" notes) ---- */
+
+// Draft state for the Add/Edit Due date sheet — kept outside the DOM
+// (like PENDING/CHAT elsewhere in this file) because renderDueSheet()
+// rebuilds the whole sheet from scratch on every structural change
+// (recur toggle, add/remove/kind-change on a notification row), the same
+// way toggleOp() re-renders the whole page rather than patching one node.
+let DUE_DRAFT = null;
+
+function blankDueDraft(){
+  return { path:'', title:'', due_date: todayISO(), due_recur:'', due_day:'', due_time:'', notifications:[] };
+}
+
+function sheetAddDue(){
+  DUE_DRAFT = blankDueDraft();
+  renderDueSheet();
+}
+
+function sheetEditDue(i){
+  const r = DUEREFS[i];
+  if(!r) return toast('Not found');
+  DUE_DRAFT = { path:r.path, title:r.title, due_date:r.due_date || todayISO(),
+    due_recur:r.due_recur || '', due_day: r.due_day != null ? String(r.due_day) : '',
+    due_time:r.due_time || '', notifications: parseNotifications(r.notifications) };
+  renderDueSheet();
+}
+
+function setDueRecur(v){ DUE_DRAFT.due_recur = v; renderDueSheet(); }
+
+function renderDueSheet(){
+  const d = DUE_DRAFT;
+  const monthly = d.due_recur === 'monthly';
+  NOTIF_EDITOR = { list: d.notifications, allowOffset: !!d.due_time, onChange: renderDueSheet };
+  openSheet(`<h1 style="font-size:22px">${d.path ? 'Edit due date' : 'Add a due date'}</h1>
+    <label>Title</label><input id="due_title" value="${esc(d.title)}" placeholder="Renew car registration"
+      autocapitalize="sentences" oninput="DUE_DRAFT.title=this.value">
+    <label>Repeats</label>
+    <div class="chips">
+      <button type="button" class="chip ${!monthly?'on':''}" onclick="setDueRecur('')">One time</button>
+      <button type="button" class="chip ${monthly?'on':''}" onclick="setDueRecur('monthly')">Monthly</button>
+    </div>
+    ${monthly ? `
+      <label>Day of month</label>
+      <input id="due_day" type="text" inputmode="numeric" maxlength="2" placeholder="15"
+        value="${esc(d.due_day)}" oninput="DUE_DRAFT.due_day=this.value">
+      <p class="sub" style="margin-top:4px">Clamped to the last day of shorter months.</p>
+    ` : `
+      <label>Due date</label>
+      <input id="due_date" type="date" value="${esc(d.due_date)}" oninput="DUE_DRAFT.due_date=this.value">
+    `}
+    <label>Time (optional)</label>${timeSelect('due_time', d.due_time)}
+    <p class="sub" style="margin-top:4px">Locked to the hour or half hour — pushes only ever run on that
+    grid. Leave blank for a day with no specific time; "Before due" notifications need this set, Wake-up/
+    Sleep notifications don't.</p>
+    <h2 style="margin-top:22px">Notifications</h2>
+    ${notifRowsHtml()}
+    <button class="btn" style="margin-top:18px" onclick="submitDue(this)">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
+    ${d.path ? `<button class="btn danger" style="margin-top:8px" onclick="submitDeleteDue(this)">Delete</button>` : ''}`);
+}
+
+async function submitDue(btn){
+  const title = val('due_title');
+  if(!title) return toast('Give it a title');
+  if(DUE_DRAFT.due_recur === 'monthly'){
+    const day = parseInt(DUE_DRAFT.due_day, 10);
+    if(!day || day < 1 || day > 31) return toast('Day of month must be 1-31');
+  }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await saveDueReminder({ ...DUE_DRAFT, title });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Due date saved');
+    setTimeout(() => refresh(true), 1500);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+async function submitDeleteDue(btn){
+  btn.disabled = true; btn.textContent = 'Deleting…';
+  try {
+    await deleteDueReminder(DUE_DRAFT);
+    closeSheet(); render();
+    toast('Deleted');
+    setTimeout(() => refresh(true), 1500);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Delete'; }
 }
 
 function sheetAddChore(){
