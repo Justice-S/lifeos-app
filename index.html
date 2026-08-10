@@ -118,6 +118,27 @@ textarea{min-height:88px;resize:vertical}
 #pull.spin .ring{animation:ptrspin .7s linear infinite}
 @keyframes ptrspin{to{transform:rotate(360deg)}}
 #app.pulling{will-change:transform}
+/* ---- calendar ---- */
+.cal-nav{display:flex;align-items:center;justify-content:space-between;margin-top:14px}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:8px}
+.cal-dow{font-size:10px;color:var(--dim);text-align:center;text-transform:uppercase;padding-bottom:2px}
+.cal-cell{aspect-ratio:1;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  position:relative;font-size:12px;background:var(--panel2);border:1px solid var(--line);
+  color:var(--dim);overflow:hidden}
+.cal-cell.pad{visibility:hidden}
+.cal-cell.today{border-color:var(--accent);border-width:2px;color:var(--text);font-weight:700}
+.cal-cell.h1{background:color-mix(in srgb, var(--accent) 22%, var(--panel2));color:var(--text)}
+.cal-cell.h2{background:color-mix(in srgb, var(--accent) 45%, var(--panel2));color:var(--text)}
+.cal-cell.h3{background:color-mix(in srgb, var(--accent) 70%, var(--panel2));color:var(--ink)}
+.cal-cell.h4{background:var(--accent);color:var(--ink);font-weight:700}
+.cal-cell.exempt{opacity:.4}
+.cal-cell .due-dot{position:absolute;bottom:2px;width:4px;height:4px;border-radius:50%;background:var(--warn)}
+.cal-week-strip{display:flex;gap:6px;margin-top:8px}
+.cal-week-strip .cal-cell{flex:1;aspect-ratio:auto;height:58px;flex-direction:column;gap:3px}
+.streak-row{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;margin-top:6px;-webkit-overflow-scrolling:touch}
+.streak-badge{flex:none;background:var(--panel);border:1px solid var(--line);border-radius:20px;
+  padding:8px 14px;font-size:13px;white-space:nowrap}
+.streak-badge b{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -125,12 +146,12 @@ textarea{min-height:88px;resize:vertical}
 <div id="app"></div>
 
 <nav id="nav">
-  <button data-v="chores"><span class="i">🧹</span>Chores</button>
-  <button data-v="talk"><span class="i">🎙️</span>Update</button>
+  <button data-v="calendar"><span class="i">📅</span>Calendar</button>
+  <button data-v="life"><span class="i">🎯</span>Life</button>
   <button data-v="money"><span class="i">💵</span>Money</button>
   <button data-v="today" class="center on"><span class="badge"><span class="i">☀️</span></span>Today</button>
+  <button data-v="chores"><span class="i">🧹</span>Chores</button>
   <button data-v="fitness"><span class="i">🏃</span>Fitness</button>
-  <button data-v="life"><span class="i">🎯</span>Life</button>
   <button data-v="settings"><span class="i">⚙️</span>Settings</button>
 </nav>
 
@@ -170,6 +191,9 @@ const ACTIVITIES = ['Lifting','Run','Walk','Cycle','Swim','Yoga','Climb','Sport'
 const INTENSITY = ['easy','moderate','hard','max'];
 const CHORE_CATEGORIES = ['home','pets','admin'];
 const CHORE_FREQS = ['daily','weekly','monthly','every_n_days'];
+const CHORE_FREQ_LABELS = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', every_n_days:'X Days' };
+const EXEMPTION_KINDS = ['holiday','day_off','event'];
+const EXEMPTION_LABELS = { holiday:'Holiday', day_off:'Day off', event:'Event' };
 
 /* ============================ tiny helpers ============================ */
 
@@ -798,6 +822,20 @@ async function saveAchievement(a){
   return write(path, body, `Achievement: ${a.title}`);
 }
 
+/* Holiday / day off / event — suppresses due-chores and push reminders for
+   every date from start_date through end_date, inclusive. See update_chores.py
+   and send.js, which both read these notes to decide what to skip. */
+async function saveExemption(e){
+  const label = safeName(e.note || EXEMPTION_LABELS[e.kind] || e.kind);
+  const path = vpath(`40 Life/Exemptions/${e.start_date} ${label}.md`);
+  // Empty chores/notifications means "everything" — update_chores.py and
+  // send.js both treat an absent/empty list that way.
+  const body = fm({ type:'exemption', kind:e.kind, start_date:e.start_date, end_date:e.end_date,
+    chores: e.chores || [], notifications: e.notifications || [],
+    note: e.note || '', tags:['exemption'] }) + `\n# ${label}\n\nAdded from the phone on ${todayISO()}.\n`;
+  return write(path, body, `Exemption: ${label}`, { mode:'update' });
+}
+
 /* ---- talk view ---- */
 
 function opLabel(op){
@@ -823,7 +861,9 @@ const OP_ICON = { expense:'💵', income:'💰', workout:'🏃', metric:'⚖️'
 
 function viewTalk(){
   const c = cfg();
-  let h = header('Update', 'Say what happened. Punctuation optional.');
+  // No longer a nav tab — reached from the pinned button at the top of Today.
+  let h = `<button class="btn sec" style="margin-bottom:10px;width:auto;padding:9px 16px" onclick="go('today')">← Today</button>`;
+  h += header('Update', 'Say what happened. Punctuation optional.');
   if(!configured()) return h + needsSetup();
   if(!c.anthropicKey){
     return h + `<div class="card"><b>One more key</b>
@@ -1030,7 +1070,7 @@ function bumpChore(name){
 }
 
 const FREQ_LABEL = c => c.frequency === 'every_n_days'
-  ? `every ${c.every_days} days`
+  ? `${c.every_days} Days`
   : c.frequency + (c.times_per_period > 1 ? ` ×${c.times_per_period}` : '');
 
 function choreRow(c, i){
@@ -1116,6 +1156,324 @@ function viewChores(){
   return h;
 }
 
+/* ============================ calendar ============================ */
+
+let CAL_MODE = 'month';   // 'month' | 'week'
+let CAL_OFFSET = 0;       // months (month mode) or weeks (week mode) from today
+
+function activityScore(day){
+  return (day.chores||0) + (day.workout?1:0) + (day.checkin?1:0) + (day.goal_progress||0);
+}
+function heatClass(score){
+  if(score <= 0) return '';
+  if(score === 1) return 'h1';
+  if(score === 2) return 'h2';
+  if(score <= 4) return 'h3';
+  return 'h4';
+}
+function calDayMap(d){
+  const m = {};
+  (d.calendar.days||[]).forEach(x => m[x.date] = x);
+  return m;
+}
+function isoOf(y, mo, day){ return `${y}-${String(mo+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`; }
+
+function viewCalendar(){
+  const d = DATA;
+  const activeStreaks = d ? (d.calendar.goal_streaks||[]).filter(g => g.streak_weeks > 0) : [];
+  let h = header('Calendar', activeStreaks.length
+    ? `${activeStreaks.length} streak${activeStreaks.length>1?'s':''} going` : '');
+  if(!configured()) return h + needsSetup();
+  if(!d || !d.calendar) return h + `<div class="empty">No calendar data yet. Pull to refresh.</div>`;
+
+  h += `<div class="row" style="margin-top:10px">
+    <div class="chips">
+      <button class="chip ${CAL_MODE==='week'?'on':''}" onclick="setCalMode('week')">Week</button>
+      <button class="chip ${CAL_MODE==='month'?'on':''}" onclick="setCalMode('month')">Month</button>
+    </div>
+    <button class="btn sec" style="width:auto;padding:9px 14px" onclick="sheetAddExemption()">+ Exemption</button>
+  </div>`;
+
+  if(activeStreaks.length){
+    h += `<div class="streak-row">` + activeStreaks.map(g =>
+      `<div class="streak-badge">🔥 <b>${g.streak_weeks}</b> wk · ${esc(g.name)}</div>`).join('') + `</div>`;
+  }
+
+  h += CAL_MODE === 'month' ? renderCalMonth(d) : renderCalWeek(d);
+
+  const ex = d.exemptions || [];
+  h += `<h2>Exemptions${ex.length ? '' : ' — none set'}</h2>`;
+  h += ex.length
+    ? `<div class="list">` + ex.map(e => {
+        const scope = [
+          (e.chores||[]).length ? `${e.chores.length} chore${e.chores.length>1?'s':''}` : '',
+          (e.notifications||[]).length ? `${e.notifications.length} reminder${e.notifications.length>1?'s':''}` : ''
+        ].filter(Boolean).join(', ');
+        const scopeLabel = scope || 'everything';
+        return `<div class="item">
+        <div><div class="m">${esc(e.note || EXEMPTION_LABELS[e.kind] || e.kind)}</div>
+        <div class="s">${esc(EXEMPTION_LABELS[e.kind] || e.kind)} · ${esc(e.start_date)}${
+          e.end_date !== e.start_date ? ' → ' + esc(e.end_date) : ''} · ${esc(scopeLabel)}</div></div>
+      </div>`; }).join('') + `</div>`
+    : `<div class="card"><span class="sub">No holidays, days off, or events set — chores and
+        reminders run normally every day. To remove one later, edit it in Obsidian.</span></div>`;
+  return h;
+}
+
+function setCalMode(m){ CAL_MODE = m; CAL_OFFSET = 0; render(); }
+function calNav(delta){ CAL_OFFSET += delta; render(); }
+
+function renderCalMonth(d){
+  const map = calDayMap(d);
+  const base = new Date(); base.setDate(1); base.setMonth(base.getMonth() + CAL_OFFSET);
+  const year = base.getFullYear(), month = base.getMonth();
+  const startWeekday = (new Date(year, month, 1).getDay() + 6) % 7; // Monday-first
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthLabel = base.toLocaleDateString('en-US', {month:'long', year:'numeric'});
+  const today = todayISO();
+
+  let cells = '';
+  for(let i = 0; i < startWeekday; i++) cells += `<div class="cal-cell pad"></div>`;
+  for(let day = 1; day <= daysInMonth; day++){
+    const iso = isoOf(year, month, day);
+    const rec = map[iso];
+    const score = rec ? activityScore(rec) : 0;
+    const cls = ['cal-cell', heatClass(score), iso===today?'today':'', rec&&rec.exempt?'exempt':'']
+      .filter(Boolean).join(' ');
+    cells += `<button class="${cls}" onclick="sheetDayDetail('${iso}')">${day}</button>`;
+  }
+  return `<div class="cal-nav">
+      <button class="btn sec" style="width:auto;padding:8px 14px" onclick="calNav(-1)">‹</button>
+      <b>${esc(monthLabel)}</b>
+      <button class="btn sec" style="width:auto;padding:8px 14px" onclick="calNav(1)">›</button>
+    </div>
+    <div class="cal-grid">
+      ${['Mo','Tu','We','Th','Fr','Sa','Su'].map(x => `<div class="cal-dow">${x}</div>`).join('')}
+      ${cells}
+    </div>`;
+}
+
+function renderCalWeek(d){
+  const map = calDayMap(d);
+  const today = new Date();
+  const base = new Date(today); base.setDate(today.getDate() + CAL_OFFSET * 7);
+  const monday = new Date(base); monday.setDate(base.getDate() - ((base.getDay() + 6) % 7));
+  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+  const todayIso = todayISO();
+  const labels = ['Mo','Tu','We','Th','Fr','Sa','Su'];
+
+  let cells = '';
+  for(let i = 0; i < 7; i++){
+    const dt = new Date(monday); dt.setDate(monday.getDate() + i);
+    const iso = isoOf(dt.getFullYear(), dt.getMonth(), dt.getDate());
+    const rec = map[iso];
+    const score = rec ? activityScore(rec) : 0;
+    const cls = ['cal-cell', heatClass(score), iso===todayIso?'today':'', rec&&rec.exempt?'exempt':'']
+      .filter(Boolean).join(' ');
+    cells += `<button class="${cls}" onclick="sheetDayDetail('${iso}')">
+      <span style="font-size:9px;opacity:.8">${labels[i]}</span><span>${dt.getDate()}</span>
+    </button>`;
+  }
+  const rangeLabel = `${monday.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – `
+    + `${sunday.toLocaleDateString('en-US',{month:'short',day:'numeric'})}`;
+  return `<div class="cal-nav">
+      <button class="btn sec" style="width:auto;padding:8px 14px" onclick="calNav(-1)">‹</button>
+      <b>${esc(rangeLabel)}</b>
+      <button class="btn sec" style="width:auto;padding:8px 14px" onclick="calNav(1)">›</button>
+    </div>
+    <div class="cal-week-strip">${cells}</div>`;
+}
+
+function sheetDayDetail(iso){
+  const d = DATA;
+  const rec = ((d && d.calendar.days) || []).find(x => x.date === iso)
+    || {date: iso, chores:0, workout:false, checkin:false, goal_progress:0, exempt:false};
+  const label = new Date(iso + 'T12:00:00').toLocaleDateString('en-US',
+    {weekday:'long', month:'long', day:'numeric'});
+  openSheet(`<h1 style="font-size:22px">${esc(label)}</h1>
+    ${rec.exempt ? `<p class="sub">Exempt — chores and reminders are off this day.</p>` : ''}
+    <div class="grid" style="margin-top:14px">
+      <div class="stat"><div class="l">Chores done</div><div class="n">${rec.chores}</div></div>
+      <div class="stat"><div class="l">Goal updates</div><div class="n">${rec.goal_progress}</div></div>
+      <div class="stat"><div class="l">Workout</div><div class="n">${rec.workout ? '✓' : '—'}</div></div>
+      <div class="stat"><div class="l">Check-in</div><div class="n">${rec.checkin ? '✓' : '—'}</div></div>
+    </div>
+    ${rec.exempt ? '' : `<button class="btn sec" style="margin-top:18px"
+      onclick="sheetAddExemption('${iso}')">Mark as exempt</button>`}
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Close</button>`);
+}
+
+const REMINDERS_PATH = '90 System/push/reminders.json';
+
+/* Falls back to a sane default shape if the file doesn't exist yet or the
+   device is offline — every caller can assume .events and .reminders exist. */
+async function loadReminderConfig(){
+  try {
+    const f = await getFile(vpath(REMINDERS_PATH));
+    if(f){ const c = JSON.parse(f.text); return { timezone_offset_hours:0, events:{}, reminders:[], ...c }; }
+  } catch(e){ /* offline, unconfigured, or file doesn't exist yet */ }
+  return { timezone_offset_hours: 0, events: {}, reminders: [] };
+}
+
+async function saveReminderConfig(cfg){
+  return write(vpath(REMINDERS_PATH), JSON.stringify(cfg, null, 2) + '\n',
+    'Update reminder schedule', { mode:'update' });
+}
+
+/* ---- Settings → Schedule: event anchor times + per-reminder frequency ---- */
+
+let REMINDER_CFG = null, reminderCfgPromise = null;
+
+/* Loads once (lazily), then just re-renders — mirrors how DATA itself starts
+   from cache and gets refreshed async elsewhere in the app. */
+function ensureReminderConfig(){
+  if(REMINDER_CFG || reminderCfgPromise) return;
+  reminderCfgPromise = loadReminderConfig().then(c => {
+    REMINDER_CFG = c; reminderCfgPromise = null; render();
+  });
+}
+
+const REMINDER_ANCHORS = ['wake','sleep','work_start','work_end','fixed'];
+const ANCHOR_LABELS = { wake:'Wake', sleep:'Sleep', work_start:'Start work', work_end:'End work', fixed:'Fixed time' };
+const REMINDER_FREQS = ['daily','weekdays','weekends','weekly','off'];
+const FREQ_DISPLAY = { daily:'Daily', weekdays:'Weekdays', weekends:'Weekends', weekly:'Weekly', off:'Off' };
+
+function reminderScheduleLabel(r){
+  if(r.anchor === 'fixed') return `${r.time || '—'} local`;
+  const off = Number(r.offset_min || 0);
+  return `${ANCHOR_LABELS[r.anchor] || r.anchor}${off ? ` ${off > 0 ? '+' : ''}${off} min` : ''}`;
+}
+
+function renderScheduleSection(){
+  if(!REMINDER_CFG) return `<div class="card"><span class="sub">Loading…</span></div>`;
+  const rc = REMINDER_CFG;
+  const ev = rc.events || {};
+  let h = `<div class="card">
+    <label>Timezone offset from UTC, in hours</label>
+    <input id="sch_tz" type="text" inputmode="numeric" value="${esc(rc.timezone_offset_hours ?? 0)}" placeholder="-5">
+    <p class="sub" style="margin-top:4px">Every time below is local — this is the only thing that
+    needs updating twice a year when the clocks change (e.g. -5 for US Eastern in winter, -4 in summer).</p>
+    <label>Wake up</label><input id="sch_wake" type="time" value="${esc(ev.wake || '')}">
+    <label>Sleep</label><input id="sch_sleep" type="time" value="${esc(ev.sleep || '')}">
+    <label>Start work</label><input id="sch_work_start" type="time" value="${esc(ev.work_start || '')}">
+    <label>End work</label><input id="sch_work_end" type="time" value="${esc(ev.work_end || '')}">
+    <button class="btn" style="margin-top:12px" onclick="submitScheduleEvents(this)">Save schedule</button>
+  </div>`;
+
+  const reminders = rc.reminders || [];
+  h += `<p class="sub" style="margin:14px 0 6px">Tap a reminder to change when it fires or how often.
+  Content and wording still come from ${REMINDERS_PATH} directly.</p>`;
+  h += reminders.length
+    ? `<div class="list">` + reminders.map((r, i) => `<div class="item">
+        <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+          onclick="sheetEditReminder(${i})">
+          <div class="m">${esc(r.title || r.id)}</div>
+          <div class="s">${esc(reminderScheduleLabel(r))} · ${esc(FREQ_DISPLAY[r.frequency] || r.frequency || 'Daily')}</div>
+        </button>
+      </div>`).join('') + `</div>`
+    : `<div class="card"><span class="sub">No reminders configured yet.</span></div>`;
+  return h;
+}
+
+async function submitScheduleEvents(btn){
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const cfg = REMINDER_CFG || await loadReminderConfig();
+  cfg.timezone_offset_hours = parseInt(val('sch_tz'), 10) || 0;
+  cfg.events = { wake: val('sch_wake'), sleep: val('sch_sleep'),
+    work_start: val('sch_work_start'), work_end: val('sch_work_end') };
+  try {
+    const r = await saveReminderConfig(cfg);
+    REMINDER_CFG = cfg;
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Schedule saved');
+  } catch(e){ toast('Failed: ' + e.message); }
+  finally { btn.disabled = false; btn.textContent = 'Save schedule'; render(); }
+}
+
+function sheetEditReminder(i){
+  const r = (REMINDER_CFG && REMINDER_CFG.reminders || [])[i];
+  if(!r) return toast('Not found');
+  openSheet(`<h1 style="font-size:22px">${esc(r.title || r.id)}</h1>
+    <label>Anchor</label>${chipRow('rm_anchor', REMINDER_ANCHORS, r.anchor || 'fixed', ANCHOR_LABELS)}
+    <label>Fixed time (only used if anchor is "Fixed time")</label>
+    <input id="rm_time" type="time" value="${esc(r.anchor === 'fixed' ? (r.time || '') : '')}">
+    <label>Offset from the event, in minutes — negative fires before it (only used for event anchors)</label>
+    <input id="rm_offset" type="text" inputmode="numeric" value="${r.anchor !== 'fixed' ? (r.offset_min || 0) : 0}">
+    <label>Frequency</label>${chipRow('rm_freq', REMINDER_FREQS, r.frequency || 'daily', FREQ_DISPLAY)}
+    <button class="btn" style="margin-top:18px" onclick="submitEditReminder(this, ${i})">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitEditReminder(btn, i){
+  const rc = REMINDER_CFG;
+  const r = (rc && rc.reminders || [])[i];
+  if(!r) return toast('Not found');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const anchor = picked('rm_anchor') || 'fixed';
+  r.anchor = anchor;
+  if(anchor === 'fixed'){ r.time = val('rm_time') || r.time || '00:00'; delete r.offset_min; }
+  else { r.offset_min = parseInt(val('rm_offset'), 10) || 0; delete r.time; }
+  r.frequency = picked('rm_freq') || 'daily';
+  try {
+    const res = await saveReminderConfig(rc);
+    closeSheet(); render();
+    toast(res === 'queued' ? 'Saved on device' : `${r.title || r.id} updated`);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+async function sheetAddExemption(prefill){
+  const dt = prefill || todayISO();
+  // "What's actively due" for today; for any other date there's no reliable
+  // way to know what would have been due, so fall back to every active chore.
+  const chores = (DATA && DATA.chores)
+    ? (dt === todayISO() ? DATA.chores.due : DATA.chores.all) : [];
+  const cfg = await loadReminderConfig();
+  const reminders = cfg.reminders || [];
+  const reminderLabels = Object.fromEntries(reminders.map(r => [r.id, r.title || r.id]));
+
+  openSheet(`<h1 style="font-size:22px">Add an exemption</h1>
+    <p class="sub">By default this covers everything due and every reminder on these days —
+    narrow it to specific items below if you'd rather.</p>
+    <label>Kind</label>${chipRow('ex_kind', EXEMPTION_KINDS, 'holiday', EXEMPTION_LABELS)}
+    <label>Start date</label><input id="ex_start" type="date" value="${dt}">
+    <label>End date</label><input id="ex_end" type="date" value="${dt}">
+    <label>Note (optional)</label><input id="ex_note" placeholder="e.g. Christmas, vacation">
+    <label>Scope</label>
+    <div class="chips" id="ex_scope">
+      <button type="button" class="chip on" data-v="everything" onclick="setExemptScope(this)">Everything</button>
+      <button type="button" class="chip" data-v="specific" onclick="setExemptScope(this)">Specific items</button>
+    </div>
+    <div id="ex_specific_wrap" class="hide">
+      ${chores.length ? `<label>Chores due${dt===todayISO()?'':' (all active — none scheduled for this date yet)'}</label>
+        ${multiChipRow('ex_chores', chores.map(c => c.name))}` : `<p class="sub">No active chores to narrow down.</p>`}
+      ${reminders.length ? `<label>Notifications</label>${multiChipRow('ex_notifs', reminders.map(r => r.id), reminderLabels)}`
+        : `<p class="sub">No notifications configured yet — set them up in Settings.</p>`}
+    </div>
+    <button class="btn" style="margin-top:18px" onclick="submitAddExemption(this)">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+function setExemptScope(btn){
+  document.querySelectorAll('#ex_scope .chip').forEach(c => c.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('ex_specific_wrap').classList.toggle('hide', btn.dataset.v !== 'specific');
+}
+
+async function submitAddExemption(btn){
+  const start = val('ex_start') || todayISO();
+  const end = val('ex_end') || start;
+  const kind = picked('ex_kind') || 'holiday';
+  const note = val('ex_note');
+  const specific = document.querySelector('#ex_scope .chip.on').dataset.v === 'specific';
+  const chores = specific ? pickedMulti('ex_chores') : [];
+  const notifications = specific ? pickedMulti('ex_notifs') : [];
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await saveExemption({ kind, start_date: start, end_date: end, note, chores, notifications });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Exemption added');
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
 /* ============================ views ============================ */
 
 let view = 'today';
@@ -1168,9 +1526,9 @@ function viewToday(){
   const day = new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
   let h = header('Today', day);
   if(!configured()) return h + needsSetup();
+  h += `<button class="btn" style="margin:6px 0 12px" onclick="go('talk')">🎙️ Dictate today's update</button>`;
   h += nudges();
   h += choresStrip();
-  h += `<button class="btn" style="margin:6px 0 12px" onclick="go('talk')">🎙️ Dictate today's update</button>`;
   h += `<div class="quick">
     <button onclick="sheetExpense()"><span class="e">💵</span><span class="t">Log expense</span><span class="d">Tap, type, done</span></button>
     <button onclick="sheetWorkout()"><span class="e">🏃</span><span class="t">Log workout</span><span class="d">Activity + minutes</span></button>
@@ -1377,6 +1735,7 @@ function viewLife(){
 
 function viewSettings(){
   const c = cfg();
+  ensureReminderConfig();
   return header('Settings','Everything is stored on this device only') + `
   <div class="card">
     <label>GitHub username</label><input id="s_owner" value="${esc(c.owner)}" autocapitalize="off" autocorrect="off">
@@ -1435,6 +1794,9 @@ function viewSettings(){
     home screen from Safari's Share menu.</p>
   </div>
 
+  <h2>Schedule</h2>
+  ${renderScheduleSection()}
+
   <h2>About</h2>
   <div class="card">
     <p class="sub" style="margin:0">LifeOS writes plain markdown to your own repo. Nothing is sent
@@ -1443,7 +1805,8 @@ function viewSettings(){
   </div>`;
 }
 
-const VIEWS = { today:viewToday, chores:viewChores, talk:viewTalk, money:viewMoney, fitness:viewFitness, life:viewLife, settings:viewSettings };
+const VIEWS = { today:viewToday, chores:viewChores, talk:viewTalk, money:viewMoney, fitness:viewFitness,
+  life:viewLife, calendar:viewCalendar, settings:viewSettings };
 
 function render(){
   GOALREFS = [];
@@ -1552,16 +1915,26 @@ function discardAndCloseSheet(){
   closeSheet();
 }
 
-function chipRow(id, opts, sel){
+function chipRow(id, opts, sel, labels){
   return `<div class="chips" id="${id}">` + opts.map(o =>
     `<button type="button" class="chip ${o===sel?'on':''}" data-v="${esc(o)}"
-      onclick="pick('${id}', this)">${esc(o)}</button>`).join('') + `</div>`;
+      onclick="pick('${id}', this)">${esc((labels && labels[o]) || o)}</button>`).join('') + `</div>`;
 }
 function pick(id, btn){
   document.querySelectorAll('#'+id+' .chip').forEach(c => c.classList.remove('on'));
   btn.classList.add('on');
 }
 const picked = id => { const n = document.querySelector('#'+id+' .chip.on'); return n ? n.dataset.v : ''; };
+
+/* Multi-select variant of chipRow — each chip toggles independently instead
+   of being mutually exclusive. Used for exemption scoping (pick specific
+   chores/notifications rather than one value). */
+function multiChipRow(id, opts, labels){
+  return `<div class="chips" id="${id}">` + opts.map(o =>
+    `<button type="button" class="chip" data-v="${esc(o)}"
+      onclick="this.classList.toggle('on')">${esc((labels && labels[o]) || o)}</button>`).join('') + `</div>`;
+}
+const pickedMulti = id => Array.from(document.querySelectorAll('#'+id+' .chip.on')).map(b => b.dataset.v);
 const val = id => { const n = document.getElementById(id); return n ? n.value.trim() : ''; };
 
 function sheetExpense(){
@@ -1697,8 +2070,8 @@ function sheetAddChore(){
   openSheet(`<h1 style="font-size:22px">Add a chore</h1>
     <label>Name</label><input id="nc_name" placeholder="e.g. Water the plants" autocapitalize="words">
     <label>Category</label>${chipRow('nc_cat', CHORE_CATEGORIES, 'home')}
-    <label>Frequency</label>${chipRow('nc_freq', CHORE_FREQS, 'daily')}
-    <label>Every N days (only if frequency is "every_n_days")</label>
+    <label>Frequency</label>${chipRow('nc_freq', CHORE_FREQS, 'daily', CHORE_FREQ_LABELS)}
+    <label>Days</label>
     <input id="nc_every" type="text" inputmode="numeric" placeholder="3">
     <label>Times per period</label><input id="nc_times" type="text" inputmode="numeric" value="1">
     <label>Area (optional)</label><input id="nc_area" placeholder="e.g. Kitchen" autocapitalize="words">
@@ -1726,8 +2099,8 @@ function sheetEditChore(i){
   openSheet(`<h1 style="font-size:22px">${esc(c.name)}</h1>
     <p class="sub">To rename it, edit the note directly in Obsidian — everything else here is fair game.</p>
     <label>Category</label>${chipRow('ec_cat', CHORE_CATEGORIES, c.category)}
-    <label>Frequency</label>${chipRow('ec_freq', CHORE_FREQS, c.frequency)}
-    <label>Every N days (only if frequency is "every_n_days")</label>
+    <label>Frequency</label>${chipRow('ec_freq', CHORE_FREQS, c.frequency, CHORE_FREQ_LABELS)}
+    <label>Days</label>
     <input id="ec_every" type="text" inputmode="numeric" value="${esc(c.every_days || '')}">
     <label>Times per period</label><input id="ec_times" type="text" inputmode="numeric" value="${c.times_per_period || 1}">
     <label>Area (optional)</label><input id="ec_area" value="${esc(c.area || '')}" autocapitalize="words">
