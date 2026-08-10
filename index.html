@@ -242,25 +242,26 @@ const EXEMPTION_LABELS = { holiday:'Holiday', day_off:'Day off', event:'Event' }
    (pass-through only) and 90 System/push/send.js (which actually fires
    them). See 40 Life/Tasks/README.md for the token format written out
    in full. */
+const ANCHOR_KINDS = ['wake','sleep','work_start','work_end'];
+
 function parseNotificationToken(tok){
   const parts = String(tok).split(':');
-  if(parts.length !== 4) return null;
-  const [kind, a, b, en] = parts;
-  const enabled = en === 'on';
-  if(kind === 'offset'){
-    const minutes = parseInt(a, 10);
-    return Number.isFinite(minutes) ? {kind:'offset', minutes, enabled} : null;
+  if(parts[0] === 'offset' && parts.length === 4){
+    const minutes = parseInt(parts[1], 10);
+    return Number.isFinite(minutes) ? {kind:'offset', minutes, enabled: parts[3]==='on'} : null;
   }
-  if(kind === 'anchor'){
-    if(!['wake','sleep'].includes(a) || !['piggyback','separate'].includes(b)) return null;
-    return {kind:'anchor', anchor:a, mode:b, enabled};
+  if(parts[0] === 'anchor' && parts.length === 5){
+    const [, anchor, offRaw, mode, en] = parts;
+    const offsetMin = parseInt(offRaw, 10);
+    if(!ANCHOR_KINDS.includes(anchor) || !['piggyback','separate'].includes(mode) || !Number.isFinite(offsetMin)) return null;
+    return {kind:'anchor', anchor, offsetMin, mode, enabled: en==='on'};
   }
   return null;
 }
 function formatNotificationToken(n){
   return n.kind === 'offset'
     ? `offset:${Math.max(30, Math.round((Number(n.minutes)||30)/30)*30)}:-:${n.enabled?'on':'off'}`
-    : `anchor:${n.anchor}:${n.mode}:${n.enabled?'on':'off'}`;
+    : `anchor:${n.anchor}:${Math.round((Number(n.offsetMin)||0)/30)*30}:${n.mode}:${n.enabled?'on':'off'}`;
 }
 function parseNotifications(list){
   return (Array.isArray(list) ? list : []).map(parseNotificationToken).filter(Boolean);
@@ -307,14 +308,17 @@ function notifRowsHtml(){
   return `<div class="list">${rows || '<div class="card"><span class="sub">None yet.</span></div>'}</div>
     <button type="button" class="btn sec" style="margin-top:10px" onclick="addNotif()">+ Add a notification</button>`;
 }
+const ANCHOR_ROW_LABELS = { wake:'Wake-up', sleep:'Sleep', work_start:'Work starts', work_end:'Work ends' };
+
 function notifRowHtml(n, i){
   const e = NOTIF_EDITOR, isOffset = n.kind === 'offset';
+  const dir = isOffset ? null : ((n.offsetMin||0) < 0 ? 'before' : (n.offsetMin||0) > 0 ? 'after' : 'at');
   return `<div class="card" style="margin-bottom:8px">
     <div class="row">
       <button type="button" class="tick ${n.enabled?'on':''}" onclick="toggleNotif(${i})" aria-label="enabled">${n.enabled?'✓':''}</button>
       <div class="chips" style="flex:1;margin-left:8px">
         ${e.allowOffset ? `<button type="button" class="chip ${isOffset?'on':''}" onclick="setNotifKind(${i},'offset')">Before due</button>` : ''}
-        <button type="button" class="chip ${!isOffset?'on':''}" onclick="setNotifKind(${i},'anchor')">Wake/Sleep</button>
+        <button type="button" class="chip ${!isOffset?'on':''}" onclick="setNotifKind(${i},'anchor')">At a time of day</button>
       </div>
       <button type="button" class="btn sec" style="width:auto;padding:6px 10px;margin-left:8px" onclick="removeNotif(${i})">✕</button>
     </div>
@@ -326,22 +330,33 @@ function notifRowHtml(n, i){
       time — an offset larger than the time of day doesn't roll back to the day before, it just won't fire.</p>
     ` : `
       <div class="chips" style="margin-top:8px">
-        <button type="button" class="chip ${n.anchor==='wake'?'on':''}" onclick="setNotifAnchor(${i},'wake')">Wake-up</button>
-        <button type="button" class="chip ${n.anchor==='sleep'?'on':''}" onclick="setNotifAnchor(${i},'sleep')">Sleep</button>
+        ${ANCHOR_KINDS.map(a => `<button type="button" class="chip ${n.anchor===a?'on':''}"
+          onclick="setNotifAnchor(${i},'${a}')">${ANCHOR_ROW_LABELS[a]}</button>`).join('')}
       </div>
+      <div class="chips" style="margin-top:8px">
+        <button type="button" class="chip ${dir==='before'?'on':''}" onclick="setNotifAnchorDir(${i},'before')">Before</button>
+        <button type="button" class="chip ${dir==='at'?'on':''}" onclick="setNotifAnchorDir(${i},'at')">At</button>
+        <button type="button" class="chip ${dir==='after'?'on':''}" onclick="setNotifAnchorDir(${i},'after')">After</button>
+      </div>
+      ${dir !== 'at' ? `
+        <label style="margin-top:8px">Hours ${dir}</label>
+        <input type="text" inputmode="decimal" placeholder="e.g. 0.5" value="${Math.abs(n.offsetMin||0)/60 || ''}"
+          oninput="setNotifAnchorHrs(${i}, this.value)">
+      ` : ''}
       <div class="chips" style="margin-top:8px">
         <button type="button" class="chip ${n.mode==='piggyback'?'on':''}" onclick="setNotifMode(${i},'piggyback')">Include in that push</button>
         <button type="button" class="chip ${n.mode==='separate'?'on':''}" onclick="setNotifMode(${i},'separate')">Send separately</button>
       </div>
-      <p class="sub" style="margin-top:4px">"Include" only mentions this when your normal wake-up/sleep
-      push actually goes out that day; "Send separately" always fires its own, at the same time.</p>
+      <p class="sub" style="margin-top:4px">"Include" only mentions this when a push actually goes out at
+      that exact adjusted time anyway (your normal wake-up/sleep/work-hours notifications, if one lands
+      there) — otherwise the mention just doesn't happen that day. "Send separately" always fires its own.</p>
     `}
   </div>`;
 }
 function addNotif(){
   NOTIF_EDITOR.list.push(NOTIF_EDITOR.allowOffset
     ? {kind:'offset', minutes:30, enabled:true}
-    : {kind:'anchor', anchor:'wake', mode:'piggyback', enabled:true});
+    : {kind:'anchor', anchor:'wake', offsetMin:0, mode:'piggyback', enabled:true});
   NOTIF_EDITOR.onChange();
 }
 function removeNotif(i){ NOTIF_EDITOR.list.splice(i,1); NOTIF_EDITOR.onChange(); }
@@ -350,11 +365,28 @@ function setNotifKind(i, kind){
   const cur = NOTIF_EDITOR.list[i];
   NOTIF_EDITOR.list[i] = kind === 'offset'
     ? {kind:'offset', minutes: cur.minutes || 30, enabled: cur.enabled}
-    : {kind:'anchor', anchor: cur.anchor || 'wake', mode: cur.mode || 'piggyback', enabled: cur.enabled};
+    : {kind:'anchor', anchor: cur.anchor || 'wake', offsetMin: cur.offsetMin || 0, mode: cur.mode || 'piggyback', enabled: cur.enabled};
   NOTIF_EDITOR.onChange();
 }
 function setNotifAnchor(i, a){ NOTIF_EDITOR.list[i].anchor = a; NOTIF_EDITOR.onChange(); }
 function setNotifMode(i, m){ NOTIF_EDITOR.list[i].mode = m; NOTIF_EDITOR.onChange(); }
+// Before/At/After is a signed offsetMin under the hood (negative/positive/
+// zero) -- switching direction keeps whatever magnitude was already set
+// (defaulting to 30 min) rather than resetting it, so toggling Before/After
+// back and forth doesn't lose what the person typed.
+function setNotifAnchorDir(i, dir){
+  const n = NOTIF_EDITOR.list[i];
+  const mag = Math.abs(n.offsetMin || 0) || 30;
+  n.offsetMin = dir === 'before' ? -mag : dir === 'after' ? mag : 0;
+  NOTIF_EDITOR.onChange();
+}
+function setNotifAnchorHrs(i, raw){
+  const n = NOTIF_EDITOR.list[i];
+  const hrs = parseFloat(raw);
+  const mag = (isNaN(hrs) || hrs < 0) ? 30 : Math.max(30, Math.round(hrs*2)*30);
+  n.offsetMin = (n.offsetMin || 0) < 0 ? -mag : mag;
+  // deliberately no onChange() -- re-rendering on every keystroke would drop focus mid-type
+}
 function setNotifOffsetHrs(i, raw){
   const hrs = parseFloat(raw);
   NOTIF_EDITOR.list[i].minutes = (isNaN(hrs) || hrs < 0) ? 30 : Math.max(30, Math.round(hrs*2)*30);
@@ -379,6 +411,11 @@ const money0 = n => guestMask('$' + Math.round(Number(n)||0).toLocaleString('en-
 const finClass = cls => cfg().guestMode ? '' : cls;
 const finSign = (cond, sign='+') => (cond && !cfg().guestMode) ? sign : '';
 const pctMask = n => { const s = Math.abs(n).toFixed(0) + '%'; return cfg().guestMode ? s.replace(/\d/g,'X') : s; };
+// Same masking guest mode applies globally, but forced on one transaction
+// regardless of the guest-mode setting -- an exempt transaction is masked
+// "as if individually put into guest mode" even when the device isn't in
+// it. Safe to call on an already-masked string too (no digits left to hit).
+const forceMask = s => s.replace(/[-+]/g,'').replace(/\d/g,'X');
 const todayISO = () => { const d=new Date(); return new Date(d.getTime()-d.getTimezoneOffset()*6e4).toISOString().slice(0,10); };
 const b64 = str => { const b=new TextEncoder().encode(str); let s=''; b.forEach(x=>s+=String.fromCharCode(x)); return btoa(s); };
 const unb64 = s => new TextDecoder().decode(Uint8Array.from(atob(String(s).replace(/\s/g,'')), c=>c.charCodeAt(0)));
@@ -789,15 +826,18 @@ shown to the person for approval.
   not invent a 1-10 value for it, and never write a word like "low" or "great" into these fields.)
 {"type":"goal_progress","summary":"","goal_id":0,"value":400,"note":""}
 {"type":"task_done","summary":"","task_id":3}
-{"type":"task_add","summary":"","text":"Call the credit union","date":"YYYY-MM-DD","due_date":null,"due_recur":null,"due_day":null,"due_time":null}
-  (due_date/due_recur/due_day/due_time are only for a task that genuinely has a
-  due date -- leave all four null for a plain quick task, which is the common
-  case. Set due_date (YYYY-MM-DD) for a one-time due date, or due_recur:
-  "monthly" with due_day (1-31) for something like "the 15th of every month" --
-  never both. due_time, if the person gives one, must round to the nearest
-  half hour -- "around 2" becomes "14:00", "quarter past 9" becomes "09:00" or
-  "09:30", whichever is closer -- because that is the only grid a push can
-  ever actually fire on. Never invent a due date that wasn't said.)
+{"type":"task_add","summary":"","text":"Call the credit union","date":"YYYY-MM-DD","due_date":null,"due_recur":null,"due_day":null,"due_weekday":null,"due_time":null}
+  (due_date/due_recur/due_day/due_weekday/due_time are only for a task that
+  genuinely has a due date -- leave all five null for a plain quick task, which
+  is the common case. Set due_date (YYYY-MM-DD) for a one-time due date, or
+  due_recur to "daily", "weekly" (with due_weekday, 0=Sunday..6=Saturday), or
+  "monthly" (with due_day, 1-31) for something recurring like "every day",
+  "every Tuesday", or "the 15th of every month" -- set only the one field that
+  recurrence needs, never due_date alongside a due_recur. due_time, if the
+  person gives one, must round to the nearest half hour -- "around 2" becomes
+  "14:00", "quarter past 9" becomes "09:00" or "09:30", whichever is closer --
+  because that is the only grid a push can ever actually fire on. Never invent
+  a due date that wasn't said.)
 {"type":"achievement","summary":"","title":"First 10k run","domain":"fitness|finance|life","date":"YYYY-MM-DD","note":""}
 {"type":"chore_done","summary":"","chore":"Feed cats","times":1,"date":"YYYY-MM-DD","note":""}
 {"type":"chore_add","summary":"","name":"Water the plants","category":"home|pets|admin","frequency":"daily|weekly|monthly|every_n_days","times_per_period":1,"every_days":null,"area":"","pet":""}
@@ -998,9 +1038,10 @@ async function runOp(op){
       // A due date makes this a task note (see saveTaskDue) instead of a
       // plain checklist line -- the common case (no due date) is unchanged.
       if(op.due_date || op.due_recur){
-        return saveTaskDue({ text: op.text, due_date: op.due_date || '',
-          due_recur: op.due_recur === 'monthly' ? 'monthly' : '',
+        const recur = ['daily','weekly','monthly'].includes(op.due_recur) ? op.due_recur : '';
+        return saveTaskDue({ text: op.text, due_date: op.due_date || '', due_recur: recur,
           due_day: op.due_day != null ? op.due_day : '',
+          due_weekday: op.due_weekday != null ? op.due_weekday : '',
           due_time: roundHalfHour(op.due_time), notifications: [] });
       }
       return addTask(op.text, date);
@@ -1030,6 +1071,17 @@ async function setTaskNoteDone(t, done){
   return write(vpath(t.path), md, `${done ? 'Done' : 'Reopen'}: ${t.text.slice(0,50)}`, { mode:'update' });
 }
 
+/* Shared checklist-line lookup: t.line is usually accurate (from the last
+   summary rebuild); the regex fallback covers it going stale between
+   rebuilds, matching on text rather than position. stateRe narrows the
+   fallback to a specific check state when the caller cares (complete only
+   wants an open box, uncomplete only a checked one); rename/delete don't,
+   so they get any checkbox state via the default. */
+function findTaskLine(lines, t, stateRe){
+  if(lines[t.line] && lines[t.line].includes(t.text)) return t.line;
+  return lines.findIndex(l => (stateRe || /^\s*[-*]\s*\[[ xX]\]/).test(l) && l.includes(t.text));
+}
+
 async function completeTask(id){
   const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
   if(!t) throw new Error('Task not found');
@@ -1037,9 +1089,7 @@ async function completeTask(id){
   const cur = await getFile(vpath(t.path));
   if(!cur) throw new Error('Task file missing');
   const lines = cur.text.split('\n');
-  let hit = -1;
-  if(lines[t.line] && lines[t.line].includes(t.text)) hit = t.line;
-  else hit = lines.findIndex(l => /^\s*[-*]\s*\[ \]/.test(l) && l.includes(t.text));
+  const hit = findTaskLine(lines, t, /^\s*[-*]\s*\[ \]/);
   if(hit < 0) throw new Error('Could not find that task line');
   lines[hit] = lines[hit].replace(/\[ \]/, '[x]');
   return write(vpath(t.path), lines.join('\n'), `Done: ${t.text.slice(0,50)}`, { mode:'update' });
@@ -1055,12 +1105,32 @@ async function uncompleteTask(id){
   const cur = await getFile(vpath(t.path));
   if(!cur) throw new Error('Task file missing');
   const lines = cur.text.split('\n');
-  let hit = -1;
-  if(lines[t.line] && lines[t.line].includes(t.text)) hit = t.line;
-  else hit = lines.findIndex(l => /^\s*[-*]\s*\[[xX]\]/.test(l) && l.includes(t.text));
+  const hit = findTaskLine(lines, t, /^\s*[-*]\s*\[[xX]\]/);
   if(hit < 0) throw new Error('Could not find that task line');
   lines[hit] = lines[hit].replace(/\[[xX]\]/, '[ ]');
   return write(vpath(t.path), lines.join('\n'), `Reopen: ${t.text.slice(0,50)}`, { mode:'update' });
+}
+
+/* Renames a checklist task in place -- preserves the bullet marker and
+   current check state, replaces only the text after it. */
+async function renameChecklistTask(t, newText){
+  const cur = await getFile(vpath(t.path));
+  if(!cur) throw new Error('Task file missing');
+  const lines = cur.text.split('\n');
+  const hit = findTaskLine(lines, t);
+  if(hit < 0) throw new Error('Could not find that task line');
+  lines[hit] = lines[hit].replace(/^(\s*[-*]\s*\[[ xX]\]\s*).*/, (_, prefix) => prefix + newText);
+  return write(vpath(t.path), lines.join('\n'), `Rename task: ${newText.slice(0,50)}`, { mode:'update' });
+}
+
+async function deleteChecklistTask(t){
+  const cur = await getFile(vpath(t.path));
+  if(!cur) throw new Error('Task file missing');
+  const lines = cur.text.split('\n');
+  const hit = findTaskLine(lines, t);
+  if(hit < 0) throw new Error('Could not find that task line');
+  lines.splice(hit, 1);
+  return write(vpath(t.path), lines.join('\n'), `Delete task: ${t.text.slice(0,50)}`, { mode:'update' });
 }
 
 async function addTask(text, date){
@@ -1073,7 +1143,10 @@ async function addTask(text, date){
    due_* fields (see build_summary.py's DUE_DEFAULTS). */
 function taskDueLine(t){
   if(t.kind !== 'note') return '';
-  const when = t.due_recur === 'monthly' ? `Monthly, day ${t.due_day}` : (t.next_date || t.due_date);
+  const when = t.due_recur === 'daily' ? 'Daily'
+    : t.due_recur === 'weekly' ? `Weekly, ${WEEKDAY_LABELS[String(t.due_weekday)] || '?'}`
+    : t.due_recur === 'monthly' ? `Monthly, day ${t.due_day}`
+    : (t.next_date || t.due_date);
   return [when, t.due_time].filter(Boolean).join(' · ');
 }
 
@@ -1081,13 +1154,12 @@ function taskRow(t, opts={}){
   const done = !!t.done, hasDue = t.kind === 'note', sub = taskDueLine(t);
   const body = `<div class="m" style="min-width:0;${done?'text-decoration:line-through;color:var(--dim)':''}">${esc(t.text)}</div>${
     sub ? `<div class="s">${esc(sub)}</div>` : ''}`;
+  const editFn = hasDue ? 'sheetEditDue' : 'sheetEditTask';
   return `<div class="item">
     <div style="display:flex;gap:11px;align-items:center;flex:1;min-width:0">
       <button class="tick ${done?'on':''}" onclick="toggleTask(${t.id}, this)"
         aria-label="${done?'mark not done':'mark done'}">${done?'✓':''}</button>
-      ${hasDue
-        ? `<button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0" onclick="sheetEditDue(${t.id})">${body}</button>`
-        : `<div style="min-width:0;flex:1">${body}</div>`}
+      <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0" onclick="${editFn}(${t.id})">${body}</button>
       ${t.due_today && !opts.hidePill ? '<span class="pill">today</span>' : ''}
     </div>
   </div>`;
@@ -1130,6 +1202,44 @@ async function submitAddTask(btn){
   finally { btn.disabled = false; }
 }
 
+// Plain checklist tasks only -- a due-date task's edit sheet is
+// sheetEditDue() (see taskRow()'s editFn branch), which also covers
+// renaming it (the "text" field there).
+function sheetEditTask(id){
+  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  if(!t) return toast('Not found');
+  openSheet(`<h1 style="font-size:22px">Edit task</h1>
+    <label>Text</label><input id="et_text" value="${esc(t.text)}" autocapitalize="sentences">
+    <button class="btn" style="margin-top:18px" onclick="submitEditTask(this, ${id})">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
+    <button class="btn danger" style="margin-top:8px" onclick="submitDeleteTask(${id})">Delete</button>`);
+}
+
+async function submitEditTask(btn, id){
+  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  if(!t) return toast('Not found');
+  const text = val('et_text');
+  if(!text) return toast('Give it some text');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await renameChecklistTask(t, text);
+    bump(d => { const x = (d.life.open_tasks||[]).find(y => y.id === id); if(x) x.text = text; });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device' : 'Task updated');
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+async function submitDeleteTask(id){
+  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  if(!t) return toast('Not found');
+  try {
+    await deleteChecklistTask(t);
+    bump(d => { d.life.open_tasks = (d.life.open_tasks||[]).filter(x => x.id !== id); });
+    closeSheet(); render();
+    toast('Deleted');
+  } catch(e){ toast('Failed: ' + e.message); }
+}
+
 async function saveChore(c){
   const name = safeName(c.name);
   if(!name) throw new Error('Chore needs a name');
@@ -1153,11 +1263,55 @@ async function updateChore(c, changes){
   return write(vpath(c.path), md, `Update chore: ${c.name}`, { mode:'update' });
 }
 
+/* Same patch-in-place pattern as updateChore -- a goal's "name" is its
+   filename (see build_summary.py, which reads it from n["_name"], not a
+   frontmatter field), so renaming isn't offered here either; domain,
+   status, metric, unit, and target are. current_value stays owned by
+   "Update progress" (submitGoal/sheetGoal above) rather than this sheet,
+   since that's also what appends a Progress log row -- editing it here
+   too would let the two silently disagree about what "current" means. */
+async function updateGoal(g, changes){
+  const cur = await getFile(vpath(g.path));
+  if(!cur) throw new Error('Goal file missing');
+  let md = cur.text;
+  for(const [k, v] of Object.entries(changes)) md = setFm(md, k, v);
+  return write(vpath(g.path), md, `Update goal: ${g.name}`, { mode:'update' });
+}
+
+/* Deliberately narrow -- category and exempt (whether it counts toward
+   spent_today/month/30d and categories, see build_summary.py) are the only
+   two fields a transaction can be edited through the app. Amount, merchant,
+   account, and date stay Obsidian-only: a wrong dollar figure silently
+   entering the financial record is worse than the inconvenience of fixing
+   it by hand, the same reasoning the dictation prompt already applies to
+   never guessing an amount in the first place. */
+async function updateTransaction(t, changes){
+  const cur = await getFile(vpath(t.path));
+  if(!cur) throw new Error('Transaction file missing');
+  let md = cur.text;
+  for(const [k, v] of Object.entries(changes)) md = setFm(md, k, v);
+  return write(vpath(t.path), md, `Update transaction: ${t.merchant}`, { mode:'update' });
+}
+
 async function saveAchievement(a){
   const path = vpath(`40 Life/Achievements/${a.date} ${safeName(a.title)}.md`);
   const body = fm({ type:'achievement', date:a.date, domain:a.domain, tags:['achievement'] })
     + `\n# ${a.title}\n\n${a.note || ''}\n\nLogged on [[10 Daily/${a.date}|${a.date}]].\n`;
   return write(path, body, `Achievement: ${a.title}`);
+}
+
+/* Frontmatter-only patch, same pattern as updateChore/updateGoal -- an
+   achievement's "name" is its filename (date + title, see saveAchievement
+   above), so renaming isn't offered here; domain and date are. The note
+   body is freeform prose the app never parses back out, so it's left
+   alone rather than risking a blind overwrite if a hand-edited file
+   doesn't match the shape saveAchievement() generates. */
+async function updateAchievement(a, changes){
+  const cur = await getFile(vpath(a.path));
+  if(!cur) throw new Error('Achievement file missing');
+  let md = cur.text;
+  for(const [k, v] of Object.entries(changes)) md = setFm(md, k, v);
+  return write(vpath(a.path), md, `Update achievement: ${a.name}`, { mode:'update' });
 }
 
 /* A task with a due date is its own note in 40 Life/Tasks/ -- a plain
@@ -1171,12 +1325,13 @@ async function saveTaskDue(t){
   const name = safeName(t.text);
   if(!name) throw new Error('Needs a title');
   const path = t.path ? vpath(t.path) : vpath(`40 Life/Tasks/${name}.md`);
-  const monthly = t.due_recur === 'monthly';
+  const recur = ['daily','weekly','monthly'].includes(t.due_recur) ? t.due_recur : '';
   const body = fm({
     type:'task', text:t.text,
-    due_date: monthly ? '' : (t.due_date || todayISO()),
-    due_recur: monthly ? 'monthly' : '',
-    due_day: monthly ? t.due_day : '',
+    due_date: recur ? '' : (t.due_date || todayISO()),
+    due_recur: recur,
+    due_day: recur === 'monthly' ? t.due_day : '',
+    due_weekday: recur === 'weekly' ? t.due_weekday : '',
     due_time: t.due_time || '',
     notifications: (t.notifications || []).map(formatNotificationToken),
     done:false, tags:['task']
@@ -1299,7 +1454,9 @@ function viewTalk(){
 
 function opDetail(op){
   const bits = [];
-  if(op.due_recur === 'monthly' && op.due_day) bits.push(`due monthly, day ${op.due_day}`);
+  if(op.due_recur === 'daily') bits.push('due daily');
+  else if(op.due_recur === 'weekly' && op.due_weekday != null) bits.push(`due weekly, ${WEEKDAY_LABELS[String(op.due_weekday)] || '?'}`);
+  else if(op.due_recur === 'monthly' && op.due_day) bits.push(`due monthly, day ${op.due_day}`);
   else if(op.due_date) bits.push(`due ${op.due_date}`);
   if(op.due_time) bits.push(roundHalfHour(op.due_time));
   if(op.date) bits.push(op.date);
@@ -2138,11 +2295,7 @@ function viewToday(){
   </div>`;
   const recent = (d.money.recent||[]).slice(0,5);
   if(recent.length){
-    h += `<h2>Latest transactions</h2><div class="list">` + recent.map(t =>
-      `<div class="item"><div><div class="m">${esc(t.merchant)}</div>
-       <div class="s">${esc(t.category)} · ${esc(t.date)}</div></div>
-       <div class="amt ${finClass(t.direction==='income'?'good':'')}">${finSign(t.direction==='income')}${money(t.amount)}</div></div>`
-    ).join('') + `</div>`;
+    h += `<h2>Latest transactions</h2><div class="list">` + recent.map(t => transactionRow(t)).join('') + `</div>`;
   }
   const wr = (d.fitness.recent||[]).slice(0,4);
   if(wr.length){
@@ -2190,6 +2343,65 @@ function paycheckCard(m){
   return h;
 }
 
+let TXNREFS = [];
+function txnRef(t){ TXNREFS.push(t); return TXNREFS.length - 1; }
+
+/* Amount/merchant/account/date are never editable here (see
+   updateTransaction) -- only category and "exempt" are, via
+   sheetEditTransaction. An exempt transaction stays visible (it's still
+   something that happened) but reads as set-aside: greyed out and its
+   amount masked the same way guest mode masks every amount, regardless of
+   whether guest mode itself is on. showAccount is only true on the Money
+   tab's full list -- Today's "Latest transactions" is tight on space and
+   the account rarely matters there. */
+function transactionRow(t, showAccount){
+  const i = txnRef(t);
+  const exempt = !!t.exempt;
+  const amt = exempt ? forceMask(money(t.amount)) : money(t.amount);
+  const sub = [t.category, showAccount ? t.account : '', t.date, exempt ? 'exempt' : ''].filter(Boolean).join(' · ');
+  return `<div class="item" style="${exempt?'opacity:.45':''}">
+    <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0" onclick="sheetEditTransaction(${i})">
+      <div class="m">${esc(t.merchant)}</div>
+      <div class="s">${esc(sub)}</div>
+    </button>
+    <div class="amt ${finClass(t.direction==='income'&&!exempt?'good':'')}">${finSign(t.direction==='income'&&!exempt)}${amt}</div>
+  </div>`;
+}
+
+function sheetEditTransaction(i){
+  const t = TXNREFS[i];
+  if(!t) return toast('Not found');
+  openSheet(`<h1 style="font-size:22px">${esc(t.merchant)}</h1>
+    <p class="sub">${esc(t.date)} · ${t.direction==='income'?'received':'spent'} ${esc(money(t.amount))}
+    — to change the amount, merchant, account, or date, edit the note directly in Obsidian.</p>
+    <label>Category</label>${chipRow('et_cat', CATEGORIES, t.category)}
+    <div class="row" style="margin-top:14px">
+      <div><b>Exempt from calculations</b>
+        <p class="sub" style="margin-top:2px">Keeps it out of spent-today/month and category totals.
+        Greys it out and masks the amount here, same as guest mode.</p></div>
+      <button class="tick ${t.exempt?'on':''}" style="width:44px;height:28px;border-radius:14px;flex-shrink:0"
+        onclick="toggleDayEnabled(this)" id="et_exempt">${t.exempt?'On':'Off'}</button>
+    </div>
+    <button class="btn" style="margin-top:18px" onclick="submitEditTransaction(this, ${i})">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitEditTransaction(btn, i){
+  const t = TXNREFS[i];
+  if(!t) return toast('Not found');
+  const category = picked('et_cat') || t.category;
+  const exemptBtn = document.getElementById('et_exempt');
+  const exempt = exemptBtn ? exemptBtn.classList.contains('on') : t.exempt;
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await updateTransaction(t, { category, exempt });
+    bump(d => { const x = (d.money.recent||[]).find(y => y.path === t.path);
+      if(x){ x.category = category; x.exempt = exempt; } });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device' : `${t.merchant} updated`);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
 function viewMoney(){
   const d = DATA;
   let h = header('Money', d ? `${d.money.transaction_count} transactions tracked` : '');
@@ -2227,11 +2439,7 @@ function viewMoney(){
     h += `<h2>Money goals</h2>` + gs.map(g => goalCard(g)).join('');
   }
   if(m.recent && m.recent.length){
-    h += `<h2>All recent</h2><div class="list">` + m.recent.slice(0,30).map(t =>
-      `<div class="item"><div><div class="m">${esc(t.merchant)}</div>
-       <div class="s">${esc(t.category)} · ${esc(t.account||'')} · ${esc(t.date)}</div></div>
-       <div class="amt ${finClass(t.direction==='income'?'good':'')}">${finSign(t.direction==='income')}${money(t.amount)}</div></div>`
-    ).join('') + `</div>`;
+    h += `<h2>All recent</h2><div class="list">` + m.recent.slice(0,30).map(t => transactionRow(t, true)).join('') + `</div>`;
   }
   return h;
 }
@@ -2276,11 +2484,16 @@ function viewFitness(){
       </div>`; }).join('') + `</div>`;
   }
   if(f.metrics && f.metrics.length){
-    h += `<h2>Body metrics</h2><div class="list">` + f.metrics.slice(0,10).map(m =>
-      `<div class="item"><div><div class="m">${esc(m.date)}</div>
-       <div class="s">${[m.body_fat_pct?m.body_fat_pct+'% bf':'', m.resting_hr?m.resting_hr+' rhr':'',
-         m.waist_in?m.waist_in+'" waist':''].filter(Boolean).join(' · ')||'—'}</div></div>
-       <div class="amt">${m.weight_lbs? m.weight_lbs+' lb' : '—'}</div></div>`).join('') + `</div>`;
+    h += `<h2>Body metrics</h2><div class="list">` + f.metrics.slice(0,10).map(m => { const i = metricRef(m);
+      return `<div class="item">
+        <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+          onclick="sheetEditMetrics(${i})">
+          <div class="m">${esc(m.date)}</div>
+          <div class="s">${[m.body_fat_pct?m.body_fat_pct+'% bf':'', m.resting_hr?m.resting_hr+' rhr':'',
+            m.waist_in?m.waist_in+'" waist':''].filter(Boolean).join(' · ')||'—'}</div>
+        </button>
+        <div class="amt">${m.weight_lbs? m.weight_lbs+' lb' : '—'}</div>
+      </div>`; }).join('') + `</div>`;
   }
   return h;
 }
@@ -2288,7 +2501,11 @@ function viewFitness(){
 let GOALREFS = [];
 function goalRef(g){ GOALREFS.push(g); return GOALREFS.length - 1; }
 
+let ACHIEVEMENTREFS = [];
+function achievementRef(a){ ACHIEVEMENTREFS.push(a); return ACHIEVEMENTREFS.length - 1; }
+
 function goalCard(g){
+  const i = goalRef(g);
   const pct = g.percent == null ? null : Math.max(0, Math.min(100, g.percent));
   return `<div class="card">
     <div class="row"><b>${esc(g.name)}</b><span class="pill">${esc(g.domain)}</span></div>
@@ -2296,7 +2513,10 @@ function goalCard(g){
     ${pct===null?'':`<div class="bar"><i style="width:${pct}%"></i></div>
       <div class="row" style="margin-top:6px"><span class="sub">${g.current} / ${g.target} ${esc(g.unit||'')}</span>
       <span class="sub">${pct.toFixed(0)}%</span></div>`}
-    <button class="btn sec" style="margin-top:10px" onclick="sheetGoal(${goalRef(g)})">Update progress</button>
+    <div class="row" style="margin-top:10px;gap:8px">
+      <button class="btn sec" style="flex:1" onclick="sheetGoal(${i})">Update progress</button>
+      <button class="btn sec" style="flex:1" onclick="sheetEditGoal(${i})">Edit</button>
+    </div>
   </div>`;
 }
 
@@ -2332,11 +2552,19 @@ function viewLife(){
         <div class="amt">${x.day_rating? x.day_rating+'/10' : '—'}</div>
       </div>`; }).join('') + `</div>`;
   }
-  if(d.life.achievements && d.life.achievements.length){
-    h += `<h2>Achievements</h2><div class="list">` + d.life.achievements.map(a =>
-      `<div class="item"><div><div class="m">${esc(a.name)}</div>
-       <div class="s">${esc(a.domain)}</div></div><div class="amt">${esc(a.date)}</div></div>`).join('') + `</div>`;
-  }
+  h += `<h2>Achievements</h2>`;
+  h += (d.life.achievements && d.life.achievements.length)
+    ? `<div class="list">` + d.life.achievements.map(a => { const i = achievementRef(a);
+        return `<div class="item">
+          <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+            onclick="sheetEditAchievement(${i})">
+            <div class="m">${esc(a.name)}</div>
+            <div class="s">${esc(a.domain)}</div>
+          </button>
+          <div class="amt">${esc(a.date)}</div>
+        </div>`; }).join('') + `</div>`
+    : `<div class="empty">Nothing yet. Add one below.</div>`;
+  h += `<button class="btn sec" style="margin-top:10px" onclick="sheetAddAchievement()">Add an achievement</button>`;
   return h;
 }
 
@@ -2472,8 +2700,11 @@ const VIEWS = { today:viewToday, chores:viewChores, talk:viewTalk, money:viewMon
 
 function render(){
   GOALREFS = [];
+  ACHIEVEMENTREFS = [];
   CHOREREFS = [];
   WORKOUTREFS = [];
+  METRICREFS = [];
+  TXNREFS = [];
   DAYREFS = [];
   $('#app').innerHTML = (VIEWS[view] || viewToday)();
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
@@ -2692,6 +2923,42 @@ async function submitWorkout(btn){
 let WORKOUTREFS = [];
 function workoutRef(w){ WORKOUTREFS.push(w); return WORKOUTREFS.length - 1; }
 
+let METRICREFS = [];
+function metricRef(m){ METRICREFS.push(m); return METRICREFS.length - 1; }
+
+/* Unlike sheetEditWorkout, no fetch-then-prefill dance is needed here --
+   every field metricNote() writes (weight/body fat/resting HR/waist) is
+   already in the summary feed for each entry, so the sheet always opens
+   with today's real numbers instead of blank ones (sheetMetrics() above
+   is the add-new path and stays blank on purpose for that reason). */
+function sheetEditMetrics(i){
+  const m = METRICREFS[i];
+  if(!m) return toast('Not found');
+  openSheet(`<h1 style="font-size:22px">${esc(m.date)}</h1>
+    <label>Weight (lb)</label><input id="em_w" class="big" type="text" inputmode="decimal" value="${esc(m.weight_lbs ?? '')}">
+    <label>Body fat %</label><input id="em_bf" type="text" inputmode="decimal" value="${esc(m.body_fat_pct ?? '')}">
+    <label>Resting heart rate</label><input id="em_hr" type="text" inputmode="numeric" value="${esc(m.resting_hr ?? '')}">
+    <label>Waist (in)</label><input id="em_waist" type="text" inputmode="decimal" value="${esc(m.waist_in ?? '')}">
+    <button class="btn" style="margin-top:18px" onclick="submitEditMetrics(this, ${i})">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitEditMetrics(btn, i){
+  const m = METRICREFS[i];
+  if(!m) return toast('Not found');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await saveMetrics({ date: m.date, weight_lbs: val('em_w'), body_fat_pct: val('em_bf'),
+      resting_hr: val('em_hr'), waist_in: val('em_waist') });
+    bump(d => { const x = (d.fitness.metrics||[]).find(y => y.date === m.date);
+      if(x){ x.weight_lbs = val('em_w'); x.body_fat_pct = val('em_bf');
+        x.resting_hr = val('em_hr'); x.waist_in = val('em_waist'); }
+      if(val('em_w')) d.fitness.latest_weight = Number(val('em_w')); });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device' : 'Metrics updated');
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
 /* Edit an existing session. Async, unlike sheetEditChore — workoutNote()
    fully regenerates the file body rather than patching single fields, so
    distance/note have to be read off the real file first or saving would
@@ -2864,6 +3131,104 @@ async function submitGoal(btn, i){
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save progress'; }
 }
 
+const GOAL_DOMAINS = ['life','fitness','finance'];
+const GOAL_STATUSES = ['active','paused','done'];
+
+function sheetEditGoal(i){
+  const g = GOALREFS[i];
+  if(!g) return toast('Goal not found');
+  openSheet(`<h1 style="font-size:22px">${esc(g.name)}</h1>
+    <p class="sub">To rename it, edit the note directly in Obsidian — everything else here is fair game.</p>
+    <label>Domain</label>${chipRow('eg_domain', GOAL_DOMAINS, g.domain)}
+    <label>Status</label>${chipRow('eg_status', GOAL_STATUSES, g.status)}
+    <label>Metric (optional)</label><input id="eg_metric" value="${esc(g.metric||'')}" placeholder="e.g. Miles run">
+    <label>Unit (optional)</label><input id="eg_unit" value="${esc(g.unit||'')}" placeholder="e.g. lbs">
+    <label>Target value</label><input id="eg_target" type="text" inputmode="decimal" value="${g.target ?? ''}">
+    <label>Target date (optional)</label><input id="eg_target_date" type="date" value="${esc(g.target_date||'')}">
+    <button class="btn" style="margin-top:18px" onclick="submitEditGoal(this, ${i})">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitEditGoal(btn, i){
+  const g = GOALREFS[i];
+  if(!g) return toast('Goal not found');
+  const target = val('eg_target');
+  if(target && isNaN(parseFloat(target))) return toast('Target must be a number');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await updateGoal(g, { domain: picked('eg_domain'), status: picked('eg_status'),
+      metric: val('eg_metric'), unit: val('eg_unit'),
+      target_value: target, target_date: val('eg_target_date') });
+    bump(d => { const x = (d.life.goals||[]).find(y => y.path === g.path);
+      if(x){ x.domain = picked('eg_domain'); x.status = picked('eg_status');
+        x.metric = val('eg_metric'); x.unit = val('eg_unit'); x.target_date = val('eg_target_date');
+        if(target){ x.target = parseFloat(target); x.percent = x.target ? +(x.current/x.target*100).toFixed(1) : null; } } });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device' : `${g.name} updated`);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+function sheetAddAchievement(){
+  openSheet(`<h1 style="font-size:22px">Add an achievement</h1>
+    <label>Title</label><input id="ach_title" placeholder="First 10k run" autocapitalize="sentences">
+    <label>Domain</label>${chipRow('ach_domain', GOAL_DOMAINS, 'life')}
+    <label>Date</label><input id="ach_date" type="date" value="${todayISO()}">
+    <label>Note (optional)</label><textarea id="ach_note" placeholder="What happened, what it took."></textarea>
+    <button class="btn" style="margin-top:18px" onclick="submitAddAchievement(this)">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitAddAchievement(btn){
+  const title = val('ach_title');
+  if(!title) return toast('Give it a title');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await saveAchievement({ title, domain: picked('ach_domain') || 'life',
+      date: val('ach_date') || todayISO(), note: val('ach_note') });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Achievement added');
+    setTimeout(() => refresh(true), 1500);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+function sheetEditAchievement(i){
+  const a = ACHIEVEMENTREFS[i];
+  if(!a) return toast('Not found');
+  openSheet(`<h1 style="font-size:22px">${esc(a.name)}</h1>
+    <p class="sub">To rename it or edit its note, edit the note directly in Obsidian — domain and date
+    are fair game here.</p>
+    <label>Domain</label>${chipRow('eac_domain', GOAL_DOMAINS, a.domain)}
+    <label>Date</label><input id="eac_date" type="date" value="${esc(a.date)}">
+    <button class="btn" style="margin-top:18px" onclick="submitEditAchievement(this, ${i})">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
+    <button class="btn danger" style="margin-top:8px" onclick="submitDeleteAchievement(${i})">Delete</button>`);
+}
+
+async function submitEditAchievement(btn, i){
+  const a = ACHIEVEMENTREFS[i];
+  if(!a) return toast('Not found');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await updateAchievement(a, { domain: picked('eac_domain'), date: val('eac_date') });
+    bump(d => { const x = (d.life.achievements||[]).find(y => y.path === a.path);
+      if(x){ x.domain = picked('eac_domain'); x.date = val('eac_date'); } });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device' : `${a.name} updated`);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+async function submitDeleteAchievement(i){
+  const a = ACHIEVEMENTREFS[i];
+  if(!a) return toast('Not found');
+  try {
+    const cur = await getFile(vpath(a.path));
+    if(cur) await deleteFile(vpath(a.path), cur.sha, `Delete achievement: ${a.name}`);
+    bump(d => { d.life.achievements = (d.life.achievements||[]).filter(x => x.path !== a.path); });
+    closeSheet(); render();
+    toast('Deleted');
+  } catch(e){ toast('Failed: ' + e.message); }
+}
+
 /* ---- due-date tasks ---- */
 
 // Draft state for the Add/Edit Due date sheet — kept outside the DOM
@@ -2874,7 +3239,8 @@ async function submitGoal(btn, i){
 let DUE_DRAFT = null;
 
 function blankDueDraft(){
-  return { path:'', text:'', due_date: todayISO(), due_recur:'', due_day:'', due_time:'', notifications:[] };
+  return { path:'', text:'', due_date: todayISO(), due_recur:'', due_day:'', due_weekday:'',
+    due_time:'', notifications:[] };
 }
 
 function sheetAddDue(){
@@ -2889,37 +3255,45 @@ function sheetEditDue(id){
   if(!t) return toast('Not found');
   DUE_DRAFT = { path:t.path, text:t.text, due_date:t.due_date || todayISO(),
     due_recur:t.due_recur || '', due_day: t.due_day != null ? String(t.due_day) : '',
+    due_weekday: t.due_weekday != null ? String(t.due_weekday) : '',
     due_time:t.due_time || '', notifications: parseNotifications(t.notifications) };
   renderDueSheet();
 }
 
 function setDueRecur(v){ DUE_DRAFT.due_recur = v; renderDueSheet(); }
+function setDueWeekday(v){ DUE_DRAFT.due_weekday = v; renderDueSheet(); }
+
+const DUE_RECURS = ['', 'daily', 'weekly', 'monthly'];
+const DUE_RECUR_LABELS = { '':'One time', daily:'Daily', weekly:'Weekly', monthly:'Monthly' };
 
 function renderDueSheet(){
   const d = DUE_DRAFT;
-  const monthly = d.due_recur === 'monthly';
   NOTIF_EDITOR = { list: d.notifications, allowOffset: !!d.due_time, onChange: renderDueSheet };
   openSheet(`<h1 style="font-size:22px">${d.path ? 'Edit due date' : 'Add a due date'}</h1>
     <label>Title</label><input id="due_title" value="${esc(d.text)}" placeholder="Renew car registration"
       autocapitalize="sentences" oninput="DUE_DRAFT.text=this.value">
     <label>Repeats</label>
-    <div class="chips">
-      <button type="button" class="chip ${!monthly?'on':''}" onclick="setDueRecur('')">One time</button>
-      <button type="button" class="chip ${monthly?'on':''}" onclick="setDueRecur('monthly')">Monthly</button>
-    </div>
-    ${monthly ? `
+    <div class="chips">${DUE_RECURS.map(r => `<button type="button" class="chip ${d.due_recur===r?'on':''}"
+      onclick="setDueRecur('${r}')">${DUE_RECUR_LABELS[r]}</button>`).join('')}</div>
+    ${d.due_recur === 'weekly' ? `
+      <label>Day of week</label>
+      <div class="chips">${WEEKDAYS.map(w => `<button type="button" class="chip ${d.due_weekday===w?'on':''}"
+        onclick="setDueWeekday('${w}')">${WEEKDAY_LABELS[w]}</button>`).join('')}</div>
+    ` : ''}
+    ${d.due_recur === 'monthly' ? `
       <label>Day of month</label>
       <input id="due_day" type="text" inputmode="numeric" maxlength="2" placeholder="15"
         value="${esc(d.due_day)}" oninput="DUE_DRAFT.due_day=this.value">
       <p class="sub" style="margin-top:4px">Clamped to the last day of shorter months.</p>
-    ` : `
+    ` : ''}
+    ${d.due_recur === '' ? `
       <label>Due date</label>
       <input id="due_date" type="date" value="${esc(d.due_date)}" oninput="DUE_DRAFT.due_date=this.value">
-    `}
+    ` : ''}
     <label>Time (optional)</label>${timeSelect('due_time', d.due_time)}
     <p class="sub" style="margin-top:4px">Locked to the hour or half hour — pushes only ever run on that
-    grid. Leave blank for a day with no specific time; "Before due" notifications need this set, Wake-up/
-    Sleep notifications don't.</p>
+    grid. Leave blank for a day with no specific time; "Before due" notifications need this set, "At a
+    time of day" notifications don't.</p>
     <h2 style="margin-top:22px">Notifications</h2>
     ${notifRowsHtml()}
     <button class="btn" style="margin-top:18px" onclick="submitDue(this)">Save</button>
@@ -2933,6 +3307,9 @@ async function submitDue(btn){
   if(DUE_DRAFT.due_recur === 'monthly'){
     const day = parseInt(DUE_DRAFT.due_day, 10);
     if(!day || day < 1 || day > 31) return toast('Day of month must be 1-31');
+  }
+  if(DUE_DRAFT.due_recur === 'weekly' && DUE_DRAFT.due_weekday === ''){
+    return toast('Pick a day of the week');
   }
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
