@@ -225,22 +225,31 @@ const ACTIVITIES = ['Lifting','Run','Walk','Cycle','Swim','Yoga','Climb','Sport'
 const INTENSITY = ['easy','moderate','hard','max'];
 const CHORE_CATEGORIES = ['home','pets','admin'];
 const CHORE_CATEGORY_LABELS = { home:'Home', pets:'Pets', admin:'Admin' };
+// One note type, type: chore, covers both a traditional recurring chore
+// (due_recur set) and what the app calls a "task" (due_recur blank, "One
+// time" below) -- see CLAUDE.md #25/#37. CHORE_FREQS/CHORE_FREQ_LABELS are
+// the recurring-only vocabulary (Chores tab filters, FREQ_LABEL); the
+// Add/Edit sheet's Repeats picker uses DUE_RECURS/DUE_RECUR_LABELS below,
+// which is CHORE_FREQS plus the one-time option.
 const CHORE_FREQS = ['daily','weekly','monthly','every_n_days'];
-const CHORE_FREQ_LABELS = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', every_n_days:'X Days' };
+const CHORE_FREQ_LABELS = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', every_n_days:'Every N days' };
+const DUE_RECURS = ['', ...CHORE_FREQS];
+const DUE_RECUR_LABELS = { '':'One time', ...CHORE_FREQ_LABELS };
 const EXEMPTION_KINDS = ['holiday','day_off','event'];
 const EXEMPTION_LABELS = { holiday:'Holiday', day_off:'Day off', event:'Event' };
 
-/* ---- due-date notifications: the due date lives directly on the task or
-   chore it belongs to, never a separate note that just references one (see
-   DUE_DRAFT/sheetAddDue below for tasks; chores carry the same fields on
-   their own note). A notification is one of:
+/* ---- due-date notifications: the due date lives directly on the chore it
+   belongs to, never a separate note that just references one (see
+   CHORE_DRAFT/renderChoreSheet below -- a one-time "task" and a recurring
+   chore are the same note type, see CHORE_FREQS above). A notification is
+   one of:
      {kind:'offset', minutes, enabled}          -- N minutes before due_time
      {kind:'anchor', anchor:'wake'|'sleep', mode:'piggyback'|'separate', enabled}
    Stored in frontmatter as compact colon-separated tokens inside a bracketed
    list (this vault's frontmatter parsers only understand flat strings and
    string lists, never nested objects) -- mirrored in build_summary.py
    (pass-through only) and 90 System/push/send.js (which actually fires
-   them). See 40 Life/Tasks/README.md for the token format written out
+   them). See 50 Chores/README.md for the token format written out
    in full. */
 const ANCHOR_KINDS = ['wake','sleep','work_start','work_end'];
 
@@ -280,24 +289,25 @@ const HALF_HOUR_TIMES = (() => {
   }
   return out;
 })();
-function timeSelect(id, value){
-  // Re-renders on change (via setDueTime), not just updates the draft --
-  // whether "Before due" is even offered as a notification kind depends on
-  // a time being set (see renderDueSheet's NOTIF_EDITOR.allowOffset), so
-  // this needs to be a structural change like the recur toggle, not a
-  // silent draft update like the plain text inputs.
-  return `<select id="${id}" onchange="setDueTime(this.value)">
+// setter is a global function name (e.g. 'setChoreDueTime', 'setGoalDueTime')
+// -- each draft-holding sheet gets its own, since which draft object it
+// mutates differs. Re-renders the whole sheet on change, not just the
+// draft, because whether "Before due" is even offered as a notification
+// kind depends on a time being set (see NOTIF_EDITOR.allowOffset below),
+// so this needs to be a structural change, not a silent draft update like
+// the plain text inputs.
+function timeSelect(id, value, setter){
+  return `<select id="${id}" onchange="${setter}(this.value)">
     <option value="">No specific time</option>` +
     HALF_HOUR_TIMES.map(t => `<option value="${t.value}" ${t.value===value?'selected':''}>${esc(t.label)}</option>`).join('') +
     `</select>`;
 }
-function setDueTime(v){ DUE_DRAFT.due_time = v; renderDueSheet(); }
 
 /* Generic notification-row editor, driven entirely by NOTIF_EDITOR so any
    sheet can embed it: set {list, allowOffset, onChange} then call
    notifRowsHtml() while building that sheet's HTML. onChange re-renders
-   the whole sheet from the caller's own draft state (see sheetAddDue/
-   sheetEditDue) -- structural edits (add/remove/kind change) need that;
+   the whole sheet from the caller's own draft state (see renderChoreSheet/
+   renderGoalEditSheet) -- structural edits (add/remove/kind change) need that;
    the offset-hours text input deliberately skips it (see setNotifOffsetHrs)
    so typing doesn't lose focus on every keystroke. */
 let NOTIF_EDITOR = null;
@@ -840,7 +850,7 @@ shown to the person for approval.
   a due date that wasn't said.)
 {"type":"achievement","summary":"","title":"First 10k run","domain":"fitness|finance|life","date":"YYYY-MM-DD","note":""}
 {"type":"chore_done","summary":"","chore":"Feed cats","times":1,"date":"YYYY-MM-DD","note":""}
-{"type":"chore_add","summary":"","name":"Water the plants","category":"home|pets|admin","frequency":"daily|weekly|monthly|every_n_days","times_per_period":1,"every_days":null,"area":"","pet":""}
+{"type":"chore_add","summary":"","name":"Water the plants","category":"home|pets|admin","due_recur":"daily|weekly|monthly|every_n_days","times_per_period":1,"due_every_days":null,"area":"","pet":""}
 {"type":"exemption","summary":"","kind":"holiday|day_off|event","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","note":""}
 
 Rules that matter:
@@ -908,7 +918,7 @@ Open tasks:
 ${tasks.length ? tasks.map(t => `  [${t.id}] ${t.text}`).join('\n') : '  none'}
 
 Chores due (use these names exactly):
-${chores.length ? chores.map(c => `  ${c.name} (${c.category}, ${c.frequency}` +
+${chores.length ? chores.map(c => `  ${c.name} (${c.category}, ${c.due_recur === 'every_n_days' ? `every ${c.due_every_days} days` : c.due_recur}` +
     (c.times_per_period > 1 ? `, ${c.done_this_period || 0} of ${c.times_per_period} done today` : '') +
     (c.overdue_days > 0 ? `, ${c.overdue_days} days overdue` : '') + ')').join('\n') : '  none outstanding'}
 All chore names: ${allChores.join(', ') || 'none defined'}
@@ -1035,11 +1045,13 @@ async function runOp(op){
     }
     case 'task_done':  return completeTask(op.task_id);
     case 'task_add': {
-      // A due date makes this a task note (see saveTaskDue) instead of a
-      // plain checklist line -- the common case (no due date) is unchanged.
+      // A due date (or recurrence) makes this a chore note (see saveChore)
+      // instead of a plain checklist line -- the common case (no due date)
+      // is unchanged. due_recur is one of daily/weekly/monthly here (the
+      // dictation prompt never offers every_n_days for a plain task_add).
       if(op.due_date || op.due_recur){
         const recur = ['daily','weekly','monthly'].includes(op.due_recur) ? op.due_recur : '';
-        return saveTaskDue({ text: op.text, due_date: op.due_date || '', due_recur: recur,
+        return saveChore({ name: op.text, due_date: op.due_date || '', due_recur: recur,
           due_day: op.due_day != null ? op.due_day : '',
           due_weekday: op.due_weekday != null ? op.due_weekday : '',
           due_time: roundHalfHour(op.due_time), notifications: [] });
@@ -1061,13 +1073,21 @@ async function runOp(op){
   }
 }
 
-/* A due-date task (kind: 'note') is its own file with a done: frontmatter
-   flag -- setting that is the whole operation, unlike a checklist task's
-   line-editing dance below. */
+/* A due-date chore (kind: 'note' -- a one-time chore, what the app calls a
+   "task", see CLAUDE.md #25/#37) is its own file with done/done_date
+   frontmatter flags -- setting those is the whole operation, unlike a
+   checklist task's line-editing dance below. Completion isn't permanent
+   (see toggleTask/CLAUDE.md #21): done_date drives sorting in the
+   Completed list, and going back to false leaves a stale done_date on the
+   note rather than clearing it (setFm() is a no-op on '', same tolerated
+   staleness as every other recur-conditional field here) -- harmless,
+   since build_summary.py only reads done_date for notes where done is
+   still true. */
 async function setTaskNoteDone(t, done){
   const cur = await getFile(vpath(t.path));
   if(!cur) throw new Error('Task note missing');
-  const md = setFm(cur.text, 'done', done);
+  let md = setFm(cur.text, 'done', done);
+  if(done) md = setFm(md, 'done_date', todayISO());
   return write(vpath(t.path), md, `${done ? 'Done' : 'Reopen'}: ${t.text.slice(0,50)}`, { mode:'update' });
 }
 
@@ -1082,8 +1102,17 @@ function findTaskLine(lines, t, stateRe){
   return lines.findIndex(l => (stateRe || /^\s*[-*]\s*\[[ xX]\]/).test(l) && l.includes(t.text));
 }
 
+// Looks a task/one-time due chore up by id, open OR completed -- ids are
+// unique across both lists (build_summary.py numbers completed_tasks
+// starting where open_tasks left off), since completion is a toggle now,
+// not a permanent move off a list the app can forget about (CLAUDE.md #21).
+function findTaskById(id){
+  return ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id)
+    || ((DATA && DATA.life.completed_tasks) || []).find(x => x.id === id);
+}
+
 async function completeTask(id){
-  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  const t = findTaskById(id);
   if(!t) throw new Error('Task not found');
   if(t.kind === 'note') return setTaskNoteDone(t, true);
   const cur = await getFile(vpath(t.path));
@@ -1099,7 +1128,7 @@ async function completeTask(id){
    done flag back to false). The checklist line lookup works in both
    directions since it matches on text, not check state. */
 async function uncompleteTask(id){
-  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  const t = findTaskById(id);
   if(!t) throw new Error('Task not found');
   if(t.kind === 'note') return setTaskNoteDone(t, false);
   const cur = await getFile(vpath(t.path));
@@ -1138,7 +1167,7 @@ async function addTask(text, date){
   return mergeWrite(path, 'task_add', {text}, `Add task: ${text.slice(0,50)}`);
 }
 
-/* A due-date task's due line: "Monthly, day 15" or "2026-08-12", plus a
+/* A due-date chore's due line: "Monthly, day 15" or "2026-08-12", plus a
    time if one's set. Blank for a plain checklist task -- those never carry
    due_* fields (see build_summary.py's DUE_DEFAULTS). */
 function taskDueLine(t){
@@ -1154,7 +1183,7 @@ function taskRow(t, opts={}){
   const done = !!t.done, hasDue = t.kind === 'note', sub = taskDueLine(t);
   const body = `<div class="m" style="min-width:0;${done?'text-decoration:line-through;color:var(--dim)':''}">${esc(t.text)}</div>${
     sub ? `<div class="s">${esc(sub)}</div>` : ''}`;
-  const editFn = hasDue ? 'sheetEditDue' : 'sheetEditTask';
+  const editFn = hasDue ? 'sheetEditDueChore' : 'sheetEditTask';
   return `<div class="item">
     <div style="display:flex;gap:11px;align-items:center;flex:1;min-width:0">
       <button class="tick ${done?'on':''}" onclick="toggleTask(${t.id}, this)"
@@ -1165,14 +1194,29 @@ function taskRow(t, opts={}){
   </div>`;
 }
 
+// Completion isn't permanent (CLAUDE.md #21) -- a done item moves from
+// open_tasks into completed_tasks (or back) locally, rather than just
+// flipping .done in place, so the Completed section reflects the tick
+// immediately instead of waiting for the next real summary rebuild.
 async function toggleTask(id, btn){
-  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  const t = findTaskById(id);
   if(!t) return toast('Task not found');
   btn.disabled = true;
   try {
     const goingDone = !t.done;
     const r = goingDone ? await completeTask(id) : await uncompleteTask(id);
-    bump(d => { const x = (d.life.open_tasks||[]).find(y => y.id === id); if(x) x.done = goingDone; });
+    bump(d => {
+      d.life.open_tasks = d.life.open_tasks || [];
+      d.life.completed_tasks = d.life.completed_tasks || [];
+      const from = goingDone ? d.life.open_tasks : d.life.completed_tasks;
+      const to = goingDone ? d.life.completed_tasks : d.life.open_tasks;
+      const idx = from.findIndex(x => x.id === id);
+      if(idx < 0) return;
+      const [x] = from.splice(idx, 1);
+      x.done = goingDone;
+      x.done_date = goingDone ? todayISO() : '';
+      to.unshift(x);
+    });
     render();
     toast(r === 'queued' ? 'Saved on device' : (goingDone ? 'Marked done' : 'Marked not done'));
   } catch(e){
@@ -1193,7 +1237,10 @@ async function submitAddTask(btn){
     /* reflect it immediately — the real id/line land on the next real sync */
     bump(d => {
       d.life.open_tasks = d.life.open_tasks || [];
-      const nextId = d.life.open_tasks.reduce((m,t) => Math.max(m, t.id), -1) + 1;
+      d.life.completed_tasks = d.life.completed_tasks || [];
+      const nextId = Math.max(
+        d.life.open_tasks.reduce((m,t) => Math.max(m, t.id), -1),
+        d.life.completed_tasks.reduce((m,t) => Math.max(m, t.id), -1)) + 1;
       d.life.open_tasks.unshift({ id: nextId, text, path: `10 Daily/${date}.md`, line: -1, source: date, done: false });
     });
     render();
@@ -1202,11 +1249,11 @@ async function submitAddTask(btn){
   finally { btn.disabled = false; }
 }
 
-// Plain checklist tasks only -- a due-date task's edit sheet is
-// sheetEditDue() (see taskRow()'s editFn branch), which also covers
+// Plain checklist tasks only -- a due-date chore's edit sheet is
+// sheetEditDueChore() (see taskRow()'s editFn branch), which also covers
 // renaming it (the "text" field there).
 function sheetEditTask(id){
-  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  const t = findTaskById(id);
   if(!t) return toast('Not found');
   openSheet(`<h1 style="font-size:22px">Edit task</h1>
     <label>Text</label><input id="et_text" value="${esc(t.text)}" autocapitalize="sentences">
@@ -1216,40 +1263,70 @@ function sheetEditTask(id){
 }
 
 async function submitEditTask(btn, id){
-  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  const t = findTaskById(id);
   if(!t) return toast('Not found');
   const text = val('et_text');
   if(!text) return toast('Give it some text');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
     const r = await renameChecklistTask(t, text);
-    bump(d => { const x = (d.life.open_tasks||[]).find(y => y.id === id); if(x) x.text = text; });
+    bump(d => {
+      const x = (d.life.open_tasks||[]).find(y => y.id === id) || (d.life.completed_tasks||[]).find(y => y.id === id);
+      if(x) x.text = text;
+    });
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device' : 'Task updated');
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
 }
 
 async function submitDeleteTask(id){
-  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  const t = findTaskById(id);
   if(!t) return toast('Not found');
   try {
     await deleteChecklistTask(t);
-    bump(d => { d.life.open_tasks = (d.life.open_tasks||[]).filter(x => x.id !== id); });
+    bump(d => {
+      d.life.open_tasks = (d.life.open_tasks||[]).filter(x => x.id !== id);
+      d.life.completed_tasks = (d.life.completed_tasks||[]).filter(x => x.id !== id);
+    });
     closeSheet(); render();
     toast('Deleted');
   } catch(e){ toast('Failed: ' + e.message); }
 }
 
+/* Builds a brand-new chore note -- 50 Chores/Definitions/{name}.md,
+   type: chore. c.due_recur set makes it recurring (the traditional "chore"
+   sense, processed by update_chores.py from the completion log); blank
+   makes it one-time (what the app calls a "task" -- same object, see
+   CLAUDE.md #25/#37). text carries the display title independently of the
+   filename -- only meaningful for a one-time item (build_summary.py falls
+   back to the filename otherwise); a recurring chore's displayed name is
+   always its filename (n["_name"]), so text is written but never read
+   back there. Editing an existing note goes through updateChore() instead
+   (this only ever creates), which is also how a chore is converted between
+   recurring and one-time -- "the object is a chore, meaning it can be
+   updated to recur" (see CLAUDE.md #37). */
 async function saveChore(c){
-  const name = safeName(c.name);
-  if(!name) throw new Error('Chore needs a name');
-  const path = vpath(`50 Chores/Definitions/${name}.md`);
+  const filename = safeName(c.name);
+  if(!filename) throw new Error('Needs a name');
+  const path = vpath(`50 Chores/Definitions/${filename}.md`);
+  const recur = ['daily','weekly','monthly','every_n_days'].includes(c.due_recur) ? c.due_recur : '';
   const body = fm({
-    type:'chore', category:c.category || 'home', frequency:c.frequency || 'daily',
-    times_per_period:c.times_per_period || 1, every_days:c.every_days || '',
-    area:c.area || '', pet:c.pet || '', active:true, last_done:'', streak:0, tags:['chore']
-  }) + `\n# ${name}\n\nAdded from the phone on ${todayISO()}.\n`;
-  return write(path, body, `Add chore: ${name}`, { mode:'update' });
+    type:'chore', category:c.category || 'home', text:c.name,
+    due_recur:recur,
+    due_date: recur ? '' : (c.due_date || todayISO()),
+    due_day: recur === 'monthly' ? c.due_day : '',
+    due_weekday: recur === 'weekly' ? c.due_weekday : '',
+    due_every_days: recur === 'every_n_days' ? (c.due_every_days || 1) : '',
+    times_per_period: recur ? (c.times_per_period || 1) : '',
+    area:c.area || '', pet:c.pet || '',
+    active:true, last_done:'', streak:0, done_this_period:0,
+    due:'', overdue_days:0, next_due:'',
+    due_time: c.due_time || '',
+    notifications: (c.notifications || []).map(formatNotificationToken),
+    done:false, done_date:'',
+    tags:['chore']
+  }) + `\n# ${filename}\n\nAdded from the phone on ${todayISO()}.\n`;
+  return write(path, body, `Add chore: ${filename}`, { mode:'update' });
 }
 
 /* Patches an existing chore's frontmatter in place — schedule/category/area/
@@ -1314,36 +1391,14 @@ async function updateAchievement(a, changes){
   return write(vpath(a.path), md, `Update achievement: ${a.name}`, { mode:'update' });
 }
 
-/* A task with a due date is its own note in 40 Life/Tasks/ -- a plain
-   checklist line (see addTask above) has nowhere to hold a date, a time,
-   or notifications, so a task that needs those becomes a small file
-   instead, the same way a chore or a goal already is one. See
-   40 Life/Tasks/README.md for the note format and DUE_DRAFT/sheetAddDue()
-   below for how the app builds one. Editing reuses the original file path
-   (like updateChore) so a text change doesn't also rename/duplicate it. */
-async function saveTaskDue(t){
-  const name = safeName(t.text);
-  if(!name) throw new Error('Needs a title');
-  const path = t.path ? vpath(t.path) : vpath(`40 Life/Tasks/${name}.md`);
-  const recur = ['daily','weekly','monthly'].includes(t.due_recur) ? t.due_recur : '';
-  const body = fm({
-    type:'task', text:t.text,
-    due_date: recur ? '' : (t.due_date || todayISO()),
-    due_recur: recur,
-    due_day: recur === 'monthly' ? t.due_day : '',
-    due_weekday: recur === 'weekly' ? t.due_weekday : '',
-    due_time: t.due_time || '',
-    notifications: (t.notifications || []).map(formatNotificationToken),
-    done:false, tags:['task']
-  }) + `\n# ${name}\n\nAdded from the phone on ${todayISO()}.\n`;
-  return write(path, body, `${t.path ? 'Update' : 'Add'} due date: ${name}`, { mode:'update' });
-}
-
-async function deleteTaskDue(t){
-  if(!t.path) throw new Error('Nothing to delete');
-  const cur = await getFile(vpath(t.path));
-  if(!cur) throw new Error('Task note missing');
-  return deleteFile(vpath(t.path), cur.sha, `Delete due date: ${t.text}`);
+/* Real delete, not the soft active:false "Remove chore" a recurring chore
+   gets (submitRemoveChoreDraft) -- a one-time due chore has no streak
+   history worth keeping, matching the original due-date sheet's behavior. */
+async function deleteDueChore(c){
+  if(!c.path) throw new Error('Nothing to delete');
+  const cur = await getFile(vpath(c.path));
+  if(!cur) throw new Error('Chore note missing');
+  return deleteFile(vpath(c.path), cur.sha, `Delete: ${c.text}`);
 }
 
 /* Holiday / day off / event — suppresses due-chores and push reminders for
@@ -1457,6 +1512,7 @@ function opDetail(op){
   if(op.due_recur === 'daily') bits.push('due daily');
   else if(op.due_recur === 'weekly' && op.due_weekday != null) bits.push(`due weekly, ${WEEKDAY_LABELS[String(op.due_weekday)] || '?'}`);
   else if(op.due_recur === 'monthly' && op.due_day) bits.push(`due monthly, day ${op.due_day}`);
+  else if(op.due_recur === 'every_n_days') bits.push(`every ${op.due_every_days || '?'} days`);
   else if(op.due_date) bits.push(`due ${op.due_date}`);
   if(op.due_time) bits.push(roundHalfHour(op.due_time));
   if(op.date) bits.push(op.date);
@@ -1467,7 +1523,6 @@ function opDetail(op){
   if(op.intensity) bits.push(op.intensity);
   if(op.journal) bits.push('journal entry');
   if(op.win) bits.push('win recorded');
-  if(op.frequency) bits.push(op.frequency);
   if(op.note) bits.push(op.note.slice(0, 40));
   return bits.join(' · ');
 }
@@ -1605,9 +1660,9 @@ function bumpChore(name){
   });
 }
 
-const FREQ_LABEL = c => c.frequency === 'every_n_days'
-  ? `${c.every_days} Days`
-  : (CHORE_FREQ_LABELS[c.frequency] || c.frequency) + (c.times_per_period > 1 ? ` ×${c.times_per_period}` : '');
+const FREQ_LABEL = c => c.due_recur === 'every_n_days'
+  ? `Every ${c.due_every_days} days`
+  : (CHORE_FREQ_LABELS[c.due_recur] || c.due_recur) + (c.times_per_period > 1 ? ` ×${c.times_per_period}` : '');
 
 function choreRow(c, i){
   const late = c.overdue_days > 0;
@@ -1659,7 +1714,7 @@ function choreFilterActive(){
 function choreMatchesFilter(c){
   if(CHORE_FILTER.category!=='all' && c.category !== CHORE_FILTER.category) return false;
   if(CHORE_FILTER.area!=='all' && (c.area||'') !== CHORE_FILTER.area) return false;
-  if(CHORE_FILTER.freq!=='all' && c.frequency !== CHORE_FILTER.freq) return false;
+  if(CHORE_FILTER.freq!=='all' && c.due_recur !== CHORE_FILTER.freq) return false;
   return true;
 }
 function setChoreFilterIdx(kind, idx){ CHORE_FILTER[kind] = CHORE_FILTER_OPTS[kind][idx]; render(); }
@@ -1727,7 +1782,7 @@ function viewChores(){
 
   h += `<h2>Add a chore</h2><div class="card"><p class="sub" style="margin:0 0 10px">
     Tap any chore above to edit its category, frequency, or schedule directly.</p>
-    <button class="btn sec" onclick="sheetAddChore()">Add a chore</button></div>`;
+    <button class="btn sec" onclick="sheetAddChore('daily')">Add a chore</button></div>`;
   return h;
 }
 
@@ -1755,7 +1810,7 @@ function isoOf(y, mo, day){ return `${y}-${String(mo+1).padStart(2,'0')}-${Strin
 
 function viewCalendar(){
   const d = DATA;
-  const activeStreaks = d ? (d.calendar.goal_streaks||[]).filter(g => g.streak_weeks > 0) : [];
+  const activeStreaks = d ? (d.calendar.goal_streaks||[]).filter(g => g.streak > 0) : [];
   let h = header('Calendar', activeStreaks.length
     ? `${activeStreaks.length} streak${activeStreaks.length>1?'s':''} going` : '');
   if(!configured()) return h + needsSetup();
@@ -1770,8 +1825,12 @@ function viewCalendar(){
   </div>`;
 
   if(activeStreaks.length){
+    // streak is period-agnostic (day/week/month, per each goal's own
+    // due_recur -- see build_summary.py's goal_streak()), so the unit
+    // shown has to track that instead of always saying "wk".
+    const streakUnit = r => r === 'daily' ? 'd' : r === 'monthly' ? 'mo' : 'wk';
     h += `<div class="streak-row">` + activeStreaks.map(g =>
-      `<div class="streak-badge">🔥 <b>${g.streak_weeks}</b> wk · ${esc(g.name)}</div>`).join('') + `</div>`;
+      `<div class="streak-badge">🔥 <b>${g.streak}</b> ${streakUnit(g.due_recur)} · ${esc(g.name)}</div>`).join('') + `</div>`;
   }
 
   h += CAL_MODE === 'month' ? renderCalMonth(d) : renderCalWeek(d);
@@ -1860,9 +1919,15 @@ function renderCalWeek(d){
 function sheetDayDetail(iso){
   const d = DATA;
   const rec = ((d && d.calendar.days) || []).find(x => x.date === iso)
-    || {date: iso, chores:0, workout:false, checkin:false, goal_progress:0, exempt:false};
+    || {date: iso, chores:0, workout:false, checkin:false, goal_progress:0, goal_checkins:[], exempt:false};
   const label = new Date(iso + 'T12:00:00').toLocaleDateString('en-US',
     {weekday:'long', month:'long', day:'numeric'});
+  // goal_checkins is due-vs-done for that day's expected goal check-ins
+  // (build_summary.py's due_occurrence() cross-referenced against the
+  // goal's own progress-log dates) -- the one place this calendar can
+  // actually show "due" for a past day; a chore's due-ness is a today-only
+  // concept (see CLAUDE.md #16/#21), so chores only ever show a done count.
+  const checkins = rec.goal_checkins || [];
   openSheet(`<h1 style="font-size:22px">${esc(label)}</h1>
     ${rec.exempt ? `<p class="sub">Exempt — chores and reminders are off this day.</p>` : ''}
     <div class="grid" style="margin-top:14px">
@@ -1871,6 +1936,10 @@ function sheetDayDetail(iso){
       <div class="stat"><div class="l">Workout</div><div class="n">${rec.workout ? '✓' : '—'}</div></div>
       <div class="stat"><div class="l">Check-in</div><div class="n">${rec.checkin ? '✓' : '—'}</div></div>
     </div>
+    ${checkins.length ? `<h2 style="margin-top:18px">Goal check-ins</h2>
+      <div class="list">` + checkins.map(c => `<div class="item">
+        <div class="m" style="${c.done?'':'color:var(--dim)'}">${c.done?'✓':'○'} ${esc(c.name)}</div>
+      </div>`).join('') + `</div>` : ''}
     ${rec.exempt ? '' : `<button class="btn sec" style="margin-top:18px"
       onclick="sheetAddExemption('${iso}')">Mark as exempt</button>`}
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Close</button>`);
@@ -2252,7 +2321,7 @@ function choresStrip(){
   // OPEN_SECTIONS (it's the common case), Weekly/Monthly/X Days start closed
   // so a long due list doesn't bury Today under things that aren't urgent.
   const groups = CHORE_FREQS
-    .map(freq => ({freq, items: due.filter(c => c.frequency === freq)}))
+    .map(freq => ({freq, items: due.filter(c => c.due_recur === freq)}))
     .filter(g => g.items.length);
   const body = groups.map(g => collapsible(`todayfreq:${g.freq}`, CHORE_FREQ_LABELS[g.freq] || g.freq,
     `<div class="list">` + g.items.map(c => choreRow(c, choreRef(c))).join('') + `</div>`,
@@ -2507,9 +2576,15 @@ function achievementRef(a){ ACHIEVEMENTREFS.push(a); return ACHIEVEMENTREFS.leng
 function goalCard(g){
   const i = goalRef(g);
   const pct = g.percent == null ? null : Math.max(0, Math.min(100, g.percent));
+  // due_recur replaces the old, never-read review_cadence field -- when
+  // set it drives both the streak on the Calendar tab and, if a time's
+  // set, a real check-in push (see CLAUDE.md #37, build_summary.py's
+  // goal_streak()).
+  const checkin = g.due_recur ? `Check in ${g.due_recur}${g.due_today ? ' · due today' : ''}` : '';
   return `<div class="card">
     <div class="row"><b>${esc(g.name)}</b><span class="pill">${esc(g.domain)}</span></div>
     <p class="sub" style="margin:6px 0 0">${esc(g.metric||'')}${g.target_date? ' · by '+esc(g.target_date):''}</p>
+    ${checkin ? `<p class="sub" style="margin:2px 0 0">${esc(checkin)}</p>` : ''}
     ${pct===null?'':`<div class="bar"><i style="width:${pct}%"></i></div>
       <div class="row" style="margin-top:6px"><span class="sub">${g.current} / ${g.target} ${esc(g.unit||'')}</span>
       <span class="sub">${pct.toFixed(0)}%</span></div>`}
@@ -2539,8 +2614,17 @@ function viewLife(){
     <button class="btn" style="width:auto;padding:13px 18px" onclick="submitAddTask(this)">Add</button>
   </div>
   <p class="sub" style="margin-top:8px">Need a due date, a specific time, or its own notifications?
-  <a href="#" onclick="sheetAddDue();return false">Add a due date</a> instead — it'll show up in the
+  <a href="#" onclick="sheetAddChore();return false">Add a due date</a> instead — it'll show up in the
   list above, right alongside everything else.</p>`;
+  const completed = d.life.completed_tasks || [];
+  if(completed.length){
+    // Completion isn't permanent (CLAUDE.md #21) -- tapping a row's tick
+    // here moves it straight back into Open tasks (toggleTask), same
+    // component as the list above, just fed the other array.
+    h += collapsible('completed_tasks', 'Completed',
+      `<div class="list">` + completed.map(t => taskRow(t, {hidePill:true})).join('') + `</div>`,
+      {subtitle: String(completed.length)});
+  }
   if(d.life.days && d.life.days.length){
     h += `<h2>Recent days</h2><div class="list">` + d.life.days.slice(0,14).map(x => { const i = dayRef(x);
       return `<div class="item">
@@ -3134,37 +3218,97 @@ async function submitGoal(btn, i){
 const GOAL_DOMAINS = ['life','fitness','finance'];
 const GOAL_STATUSES = ['active','paused','done'];
 
+// Draft state, same reason as CHORE_DRAFT -- a check-in cadence needs the
+// same conditional (Repeats) re-render and a NOTIF_EDITOR-hosted
+// notification list, which a plain read-the-DOM-at-submit sheet (like the
+// rest of this one) can't carry across taps.
+let GOAL_DRAFT = null;
+// every_n_days isn't offered here -- goal_streak() only recognizes
+// daily/weekly/monthly (defaulting anything else to weekly), the same set
+// due_occurrence() understands for a goal.
+const GOAL_RECURS = ['', 'daily', 'weekly', 'monthly'];
+
 function sheetEditGoal(i){
   const g = GOALREFS[i];
   if(!g) return toast('Goal not found');
-  openSheet(`<h1 style="font-size:22px">${esc(g.name)}</h1>
+  GOAL_DRAFT = { path:g.path, name:g.name, domain:g.domain, status:g.status,
+    metric:g.metric||'', unit:g.unit||'', target: g.target ?? '', target_date: g.target_date||'',
+    due_recur: g.due_recur || '', due_day: g.due_day != null ? String(g.due_day) : '',
+    due_weekday: g.due_weekday != null ? String(g.due_weekday) : '',
+    due_time: g.due_time || '', notifications: parseNotifications(g.notifications) };
+  renderGoalEditSheet();
+}
+
+function setGoalRecur(v){ GOAL_DRAFT.due_recur = v; renderGoalEditSheet(); }
+function setGoalWeekday(v){ GOAL_DRAFT.due_weekday = v; renderGoalEditSheet(); }
+function setGoalDueTime(v){ GOAL_DRAFT.due_time = v; renderGoalEditSheet(); }
+
+function renderGoalEditSheet(){
+  const d = GOAL_DRAFT;
+  NOTIF_EDITOR = { list: d.notifications, allowOffset: !!d.due_time, onChange: renderGoalEditSheet };
+  openSheet(`<h1 style="font-size:22px">${esc(d.name)}</h1>
     <p class="sub">To rename it, edit the note directly in Obsidian — everything else here is fair game.</p>
-    <label>Domain</label>${chipRow('eg_domain', GOAL_DOMAINS, g.domain)}
-    <label>Status</label>${chipRow('eg_status', GOAL_STATUSES, g.status)}
-    <label>Metric (optional)</label><input id="eg_metric" value="${esc(g.metric||'')}" placeholder="e.g. Miles run">
-    <label>Unit (optional)</label><input id="eg_unit" value="${esc(g.unit||'')}" placeholder="e.g. lbs">
-    <label>Target value</label><input id="eg_target" type="text" inputmode="decimal" value="${g.target ?? ''}">
-    <label>Target date (optional)</label><input id="eg_target_date" type="date" value="${esc(g.target_date||'')}">
-    <button class="btn" style="margin-top:18px" onclick="submitEditGoal(this, ${i})">Save</button>
+    <label>Domain</label>${chipRow('eg_domain', GOAL_DOMAINS, d.domain)}
+    <label>Status</label>${chipRow('eg_status', GOAL_STATUSES, d.status)}
+    <label>Metric (optional)</label><input id="eg_metric" value="${esc(d.metric)}" placeholder="e.g. Miles run">
+    <label>Unit (optional)</label><input id="eg_unit" value="${esc(d.unit)}" placeholder="e.g. lbs">
+    <label>Target value</label><input id="eg_target" type="text" inputmode="decimal" value="${d.target}">
+    <label>Target date (optional)</label><input id="eg_target_date" type="date" value="${esc(d.target_date)}">
+    <h2 style="margin-top:22px">Check-in</h2>
+    <p class="sub">How often to check progress — drives the streak on the Calendar tab and, if you set
+    a time, a reminder to update it.</p>
+    <label>Repeats</label>
+    <div class="chips">${GOAL_RECURS.map(r => `<button type="button" class="chip ${d.due_recur===r?'on':''}"
+      onclick="setGoalRecur('${r}')">${DUE_RECUR_LABELS[r]}</button>`).join('')}</div>
+    ${d.due_recur === 'weekly' ? `
+      <label>Day of week</label>
+      <div class="chips">${WEEKDAYS.map(w => `<button type="button" class="chip ${d.due_weekday===w?'on':''}"
+        onclick="setGoalWeekday('${w}')">${WEEKDAY_LABELS[w]}</button>`).join('')}</div>
+    ` : ''}
+    ${d.due_recur === 'monthly' ? `
+      <label>Day of month</label>
+      <input id="eg_day" type="text" inputmode="numeric" maxlength="2" placeholder="15"
+        value="${esc(d.due_day)}" oninput="GOAL_DRAFT.due_day=this.value">
+      <p class="sub" style="margin-top:4px">Clamped to the last day of shorter months.</p>
+    ` : ''}
+    ${d.due_recur ? `
+      <label>Time (optional)</label>${timeSelect('eg_time', d.due_time, 'setGoalDueTime')}
+      <h2 style="margin-top:22px">Notifications</h2>
+      ${notifRowsHtml()}
+    ` : ''}
+    <button class="btn" style="margin-top:18px" onclick="submitEditGoal(this)">Save</button>
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
 }
 
-async function submitEditGoal(btn, i){
-  const g = GOALREFS[i];
-  if(!g) return toast('Goal not found');
+async function submitEditGoal(btn){
+  const d = GOAL_DRAFT;
   const target = val('eg_target');
   if(target && isNaN(parseFloat(target))) return toast('Target must be a number');
+  if(d.due_recur === 'monthly'){
+    const day = parseInt(val('eg_day'), 10);
+    if(!day || day < 1 || day > 31) return toast('Day of month must be 1-31');
+  }
+  if(d.due_recur === 'weekly' && d.due_weekday === ''){
+    return toast('Pick a day of the week');
+  }
   btn.disabled = true; btn.textContent = 'Saving…';
+  const domain = picked('eg_domain'), status = picked('eg_status');
+  const metric = val('eg_metric'), unit = val('eg_unit'), target_date = val('eg_target_date');
   try {
-    const r = await updateGoal(g, { domain: picked('eg_domain'), status: picked('eg_status'),
-      metric: val('eg_metric'), unit: val('eg_unit'),
-      target_value: target, target_date: val('eg_target_date') });
-    bump(d => { const x = (d.life.goals||[]).find(y => y.path === g.path);
-      if(x){ x.domain = picked('eg_domain'); x.status = picked('eg_status');
-        x.metric = val('eg_metric'); x.unit = val('eg_unit'); x.target_date = val('eg_target_date');
+    const r = await updateGoal({path:d.path, name:d.name}, {
+      domain, status, metric, unit, target_value: target, target_date,
+      due_recur: d.due_recur,
+      due_day: d.due_recur === 'monthly' ? val('eg_day') : '',
+      due_weekday: d.due_recur === 'weekly' ? d.due_weekday : '',
+      due_time: d.due_recur ? d.due_time : '',
+      notifications: `[${(d.due_recur ? d.notifications : []).map(formatNotificationToken).join(', ')}]`,
+    });
+    bump(dd => { const x = (dd.life.goals||[]).find(y => y.path === d.path);
+      if(x){ x.domain = domain; x.status = status; x.metric = metric; x.unit = unit; x.target_date = target_date;
+        x.due_recur = d.due_recur;
         if(target){ x.target = parseFloat(target); x.percent = x.target ? +(x.current/x.target*100).toFixed(1) : null; } } });
     closeSheet(); render();
-    toast(r === 'queued' ? 'Saved on device' : `${g.name} updated`);
+    toast(r === 'queued' ? 'Saved on device' : `${d.name} updated`);
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
 }
 
@@ -3229,173 +3373,193 @@ async function submitDeleteAchievement(i){
   } catch(e){ toast('Failed: ' + e.message); }
 }
 
-/* ---- due-date tasks ---- */
+/* ---- chores (recurring and one-time -- "the object is a chore, meaning
+   it can be updated to recur", CLAUDE.md #37) ---- */
 
-// Draft state for the Add/Edit Due date sheet — kept outside the DOM
-// (like PENDING/CHAT elsewhere in this file) because renderDueSheet()
-// rebuilds the whole sheet from scratch on every structural change
-// (recur toggle, add/remove/kind-change on a notification row), the same
-// way toggleOp() re-renders the whole page rather than patching one node.
-let DUE_DRAFT = null;
+// Draft state for the one Add/Edit Chore sheet, shared by every entry
+// point (Chores tab's "Add a chore"/tap-a-chore, Life tab's "Add a due
+// date"/tap-a-due-item) -- kept outside the DOM (like PENDING/CHAT
+// elsewhere in this file) because renderChoreSheet() rebuilds the whole
+// sheet from scratch on every structural change (Repeats toggle, notif
+// row add/remove/kind-change), the same way toggleOp() re-renders the
+// whole page rather than patching one node.
+let CHORE_DRAFT = null;
 
-function blankDueDraft(){
-  return { path:'', text:'', due_date: todayISO(), due_recur:'', due_day:'', due_weekday:'',
-    due_time:'', notifications:[] };
+function blankChoreDraft(recur){
+  return { path:'', origRecur:false, text:'', category:'home', due_recur: recur || '',
+    due_date: todayISO(), due_day:'', due_weekday:'', due_every_days:'',
+    times_per_period:'1', area:'', pet:'', due_time:'', notifications:[] };
 }
 
-function sheetAddDue(){
-  DUE_DRAFT = blankDueDraft();
-  renderDueSheet();
+// c is either a CHOREREFS entry (recurring, carries .name) or an
+// open_tasks/completed_tasks entry (one-time, carries .text) -- both share
+// enough of the same shape (see build_summary.py's chores "base" dict)
+// that one mapping handles either. origRecur is captured once here, not
+// re-derived from the live (editable) due_recur below -- it's what decides
+// whether the Name field and the Remove-vs-Delete button reflect the
+// note's persisted identity, which shouldn't flicker just because the
+// person is mid-way through toggling Repeats before saving.
+function choreToDraft(c){
+  const wasRecur = !!c.due_recur;
+  return {
+    path: c.path || '', origRecur: wasRecur,
+    text: wasRecur ? (c.name || '') : (c.text || c.name || ''),
+    category: c.category || 'home',
+    due_recur: c.due_recur || '', due_date: c.due_date || todayISO(),
+    due_day: c.due_day != null ? String(c.due_day) : '',
+    due_weekday: c.due_weekday != null ? String(c.due_weekday) : '',
+    due_every_days: c.due_every_days ? String(c.due_every_days) : '',
+    times_per_period: c.times_per_period != null ? String(c.times_per_period) : '1',
+    area: c.area || '', pet: c.pet || '', due_time: c.due_time || '',
+    notifications: parseNotifications(c.notifications),
+  };
 }
 
-// Looks the task up in DATA.life.open_tasks by id rather than a separate
-// ref array (like CHOREREFS) — open_tasks is already exactly that list.
-function sheetEditDue(id){
-  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
-  if(!t) return toast('Not found');
-  DUE_DRAFT = { path:t.path, text:t.text, due_date:t.due_date || todayISO(),
-    due_recur:t.due_recur || '', due_day: t.due_day != null ? String(t.due_day) : '',
-    due_weekday: t.due_weekday != null ? String(t.due_weekday) : '',
-    due_time:t.due_time || '', notifications: parseNotifications(t.notifications) };
-  renderDueSheet();
+function sheetAddChore(recur){
+  CHORE_DRAFT = blankChoreDraft(recur);
+  renderChoreSheet();
 }
 
-function setDueRecur(v){ DUE_DRAFT.due_recur = v; renderDueSheet(); }
-function setDueWeekday(v){ DUE_DRAFT.due_weekday = v; renderDueSheet(); }
-
-const DUE_RECURS = ['', 'daily', 'weekly', 'monthly'];
-const DUE_RECUR_LABELS = { '':'One time', daily:'Daily', weekly:'Weekly', monthly:'Monthly' };
-
-function renderDueSheet(){
-  const d = DUE_DRAFT;
-  NOTIF_EDITOR = { list: d.notifications, allowOffset: !!d.due_time, onChange: renderDueSheet };
-  openSheet(`<h1 style="font-size:22px">${d.path ? 'Edit due date' : 'Add a due date'}</h1>
-    <label>Title</label><input id="due_title" value="${esc(d.text)}" placeholder="Renew car registration"
-      autocapitalize="sentences" oninput="DUE_DRAFT.text=this.value">
-    <label>Repeats</label>
-    <div class="chips">${DUE_RECURS.map(r => `<button type="button" class="chip ${d.due_recur===r?'on':''}"
-      onclick="setDueRecur('${r}')">${DUE_RECUR_LABELS[r]}</button>`).join('')}</div>
-    ${d.due_recur === 'weekly' ? `
-      <label>Day of week</label>
-      <div class="chips">${WEEKDAYS.map(w => `<button type="button" class="chip ${d.due_weekday===w?'on':''}"
-        onclick="setDueWeekday('${w}')">${WEEKDAY_LABELS[w]}</button>`).join('')}</div>
-    ` : ''}
-    ${d.due_recur === 'monthly' ? `
-      <label>Day of month</label>
-      <input id="due_day" type="text" inputmode="numeric" maxlength="2" placeholder="15"
-        value="${esc(d.due_day)}" oninput="DUE_DRAFT.due_day=this.value">
-      <p class="sub" style="margin-top:4px">Clamped to the last day of shorter months.</p>
-    ` : ''}
-    ${d.due_recur === '' ? `
-      <label>Due date</label>
-      <input id="due_date" type="date" value="${esc(d.due_date)}" oninput="DUE_DRAFT.due_date=this.value">
-    ` : ''}
-    <label>Time (optional)</label>${timeSelect('due_time', d.due_time)}
-    <p class="sub" style="margin-top:4px">Locked to the hour or half hour — pushes only ever run on that
-    grid. Leave blank for a day with no specific time; "Before due" notifications need this set, "At a
-    time of day" notifications don't.</p>
-    <h2 style="margin-top:22px">Notifications</h2>
-    ${notifRowsHtml()}
-    <button class="btn" style="margin-top:18px" onclick="submitDue(this)">Save</button>
-    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
-    ${d.path ? `<button class="btn danger" style="margin-top:8px" onclick="submitDeleteDue(this)">Delete</button>` : ''}`);
-}
-
-async function submitDue(btn){
-  const text = val('due_title');
-  if(!text) return toast('Give it a title');
-  if(DUE_DRAFT.due_recur === 'monthly'){
-    const day = parseInt(DUE_DRAFT.due_day, 10);
-    if(!day || day < 1 || day > 31) return toast('Day of month must be 1-31');
-  }
-  if(DUE_DRAFT.due_recur === 'weekly' && DUE_DRAFT.due_weekday === ''){
-    return toast('Pick a day of the week');
-  }
-  btn.disabled = true; btn.textContent = 'Saving…';
-  try {
-    const r = await saveTaskDue({ ...DUE_DRAFT, text });
-    closeSheet(); render();
-    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Due date saved');
-    setTimeout(() => refresh(true), 1500);
-  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
-}
-
-async function submitDeleteDue(btn){
-  btn.disabled = true; btn.textContent = 'Deleting…';
-  try {
-    await deleteTaskDue(DUE_DRAFT);
-    closeSheet(); render();
-    toast('Deleted');
-    setTimeout(() => refresh(true), 1500);
-  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Delete'; }
-}
-
-function sheetAddChore(){
-  openSheet(`<h1 style="font-size:22px">Add a chore</h1>
-    <label>Name</label><input id="nc_name" placeholder="e.g. Water the plants" autocapitalize="words">
-    <label>Category</label>${chipRow('nc_cat', CHORE_CATEGORIES, 'home')}
-    <label>Frequency</label>${chipRow('nc_freq', CHORE_FREQS, 'daily', CHORE_FREQ_LABELS)}
-    <label>Days</label>
-    <input id="nc_every" type="text" inputmode="numeric" placeholder="3">
-    <label>Times per period</label><input id="nc_times" type="text" inputmode="numeric" value="1">
-    <label>Area (optional)</label><input id="nc_area" placeholder="e.g. Kitchen" autocapitalize="words">
-    <label>Pet (optional)</label><input id="nc_pet" placeholder="e.g. Cats" autocapitalize="words">
-    <button class="btn" style="margin-top:18px" onclick="submitAddChore(this)">Save</button>
-    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
-}
-
-async function submitAddChore(btn){
-  const name = val('nc_name');
-  if(!name) return toast('Give it a name');
-  btn.disabled = true; btn.textContent = 'Saving…';
-  try {
-    const r = await saveChore({ name, category: picked('nc_cat') || 'home',
-      frequency: picked('nc_freq') || 'daily', every_days: val('nc_every'),
-      times_per_period: val('nc_times') || 1, area: val('nc_area'), pet: val('nc_pet') });
-    closeSheet(); render();
-    toast(r === 'queued' ? 'Saved on device — will upload when online' : `Added ${name}`);
-  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
-}
-
+// Recurring chores, reached from the Chores tab (CHOREREFS, same ref-array
+// pattern as every other list-by-index sheet in this file).
 function sheetEditChore(i){
   const c = CHOREREFS[i];
   if(!c) return toast('Chore not found');
-  openSheet(`<h1 style="font-size:22px">${esc(c.name)}</h1>
-    <p class="sub">To rename it, edit the note directly in Obsidian — everything else here is fair game.</p>
-    <label>Category</label>${chipRow('ec_cat', CHORE_CATEGORIES, c.category)}
-    <label>Frequency</label>${chipRow('ec_freq', CHORE_FREQS, c.frequency, CHORE_FREQ_LABELS)}
-    <label>Days</label>
-    <input id="ec_every" type="text" inputmode="numeric" value="${esc(c.every_days || '')}">
-    <label>Times per period</label><input id="ec_times" type="text" inputmode="numeric" value="${c.times_per_period || 1}">
-    <label>Area (optional)</label><input id="ec_area" value="${esc(c.area || '')}" autocapitalize="words">
-    <label>Pet (optional)</label><input id="ec_pet" value="${esc(c.pet || '')}" autocapitalize="words">
-    <button class="btn" style="margin-top:18px" onclick="submitEditChore(this, ${i})">Save</button>
-    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
-    <button class="btn danger" style="margin-top:8px" onclick="submitRemoveChore(${i})">Remove chore</button>`);
+  CHORE_DRAFT = choreToDraft(c);
+  renderChoreSheet();
 }
 
-async function submitEditChore(btn, i){
-  const c = CHOREREFS[i];
-  if(!c) return toast('Chore not found');
+// One-time due chores ("tasks"), reached from the Life tab's open/completed
+// task lists — looked up by id, same as sheetEditTask, rather than a
+// separate ref array, since open_tasks/completed_tasks already are one.
+function sheetEditDueChore(id){
+  const t = findTaskById(id);
+  if(!t) return toast('Not found');
+  CHORE_DRAFT = choreToDraft(t);
+  renderChoreSheet();
+}
+
+function setChoreRecur(v){ CHORE_DRAFT.due_recur = v; renderChoreSheet(); }
+function setChoreWeekday(v){ CHORE_DRAFT.due_weekday = v; renderChoreSheet(); }
+function setChoreDueTime(v){ CHORE_DRAFT.due_time = v; renderChoreSheet(); }
+
+function renderChoreSheet(){
+  const d = CHORE_DRAFT;
+  NOTIF_EDITOR = { list: d.notifications, allowOffset: !!d.due_time, onChange: renderChoreSheet };
+  openSheet(`<h1 style="font-size:22px">${d.path ? (d.origRecur ? esc(d.text) : 'Edit') : 'Add a chore'}</h1>
+    <label>${d.due_recur === '' ? 'Title' : 'Name'}</label>
+    <input id="ch_text" value="${esc(d.text)}" placeholder="e.g. Water the plants"
+      autocapitalize="sentences" oninput="CHORE_DRAFT.text=this.value" ${d.path && d.origRecur ? 'disabled' : ''}>
+    ${d.path && d.origRecur ? `<p class="sub" style="margin-top:4px">To rename it, edit the note directly in Obsidian.</p>` : ''}
+    <label>Category</label>${chipRow('ch_cat', CHORE_CATEGORIES, d.category, CHORE_CATEGORY_LABELS)}
+    <label>Repeats</label>
+    <div class="chips">${DUE_RECURS.map(r => `<button type="button" class="chip ${d.due_recur===r?'on':''}"
+      onclick="setChoreRecur('${r}')">${DUE_RECUR_LABELS[r]}</button>`).join('')}</div>
+    ${d.due_recur === 'weekly' ? `
+      <label>Day of week</label>
+      <div class="chips">${WEEKDAYS.map(w => `<button type="button" class="chip ${d.due_weekday===w?'on':''}"
+        onclick="setChoreWeekday('${w}')">${WEEKDAY_LABELS[w]}</button>`).join('')}</div>
+    ` : ''}
+    ${d.due_recur === 'monthly' ? `
+      <label>Day of month</label>
+      <input id="ch_day" type="text" inputmode="numeric" maxlength="2" placeholder="15"
+        value="${esc(d.due_day)}" oninput="CHORE_DRAFT.due_day=this.value">
+      <p class="sub" style="margin-top:4px">Clamped to the last day of shorter months.</p>
+    ` : ''}
+    ${d.due_recur === 'every_n_days' ? `
+      <label>Every how many days</label>
+      <input id="ch_every" type="text" inputmode="numeric" placeholder="3"
+        value="${esc(d.due_every_days)}" oninput="CHORE_DRAFT.due_every_days=this.value">
+    ` : ''}
+    ${d.due_recur === '' ? `
+      <label>Due date</label>
+      <input id="ch_date" type="date" value="${esc(d.due_date)}" oninput="CHORE_DRAFT.due_date=this.value">
+    ` : `
+      <label>Times per period</label>
+      <input id="ch_times" type="text" inputmode="numeric" value="${esc(d.times_per_period)}"
+        oninput="CHORE_DRAFT.times_per_period=this.value">
+    `}
+    <label>Area (optional)</label><input id="ch_area" value="${esc(d.area)}" placeholder="e.g. Kitchen"
+      autocapitalize="words" oninput="CHORE_DRAFT.area=this.value">
+    <label>Pet (optional)</label><input id="ch_pet" value="${esc(d.pet)}" placeholder="e.g. Cats"
+      autocapitalize="words" oninput="CHORE_DRAFT.pet=this.value">
+    <label>Time (optional)</label>${timeSelect('ch_time', d.due_time, 'setChoreDueTime')}
+    <p class="sub" style="margin-top:4px">Locked to the hour or half hour — pushes only ever run on that
+    grid. "Before due" notifications need this set, "At a time of day" notifications don't.</p>
+    <h2 style="margin-top:22px">Notifications</h2>
+    ${notifRowsHtml()}
+    <button class="btn" style="margin-top:18px" onclick="submitChore(this)">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
+    ${d.path && d.origRecur ? `<button class="btn danger" style="margin-top:8px" onclick="submitRemoveChoreDraft()">Remove chore</button>` : ''}
+    ${d.path && !d.origRecur ? `<button class="btn danger" style="margin-top:8px" onclick="submitDeleteDueChore()">Delete</button>` : ''}`);
+}
+
+// Only a one-time item's title is editable here (see choreToDraft/the
+// disabled input above) -- a recurring chore's displayed name is always
+// its filename, so text is never patched back for one.
+function choreChanges(d){
+  const changes = {
+    category: picked('ch_cat') || 'home',
+    due_recur: d.due_recur,
+    due_date: d.due_recur === '' ? (d.due_date || todayISO()) : '',
+    due_day: d.due_recur === 'monthly' ? d.due_day : '',
+    due_weekday: d.due_recur === 'weekly' ? d.due_weekday : '',
+    due_every_days: d.due_recur === 'every_n_days' ? d.due_every_days : '',
+    times_per_period: d.due_recur ? (d.times_per_period || 1) : '',
+    area: d.area, pet: d.pet, due_time: d.due_time,
+    notifications: `[${(d.notifications||[]).map(formatNotificationToken).join(', ')}]`,
+  };
+  if(!d.origRecur) changes.text = d.text;
+  return changes;
+}
+
+async function submitChore(btn){
+  const d = CHORE_DRAFT;
+  const text = (d.text || '').trim();
+  if(!text) return toast('Give it a name');
+  if(d.due_recur === 'monthly'){
+    const day = parseInt(d.due_day, 10);
+    if(!day || day < 1 || day > 31) return toast('Day of month must be 1-31');
+  }
+  if(d.due_recur === 'weekly' && d.due_weekday === ''){
+    return toast('Pick a day of the week');
+  }
+  if(d.due_recur === 'every_n_days'){
+    const every = parseInt(d.due_every_days, 10);
+    if(!every || every < 1) return toast('Give a number of days');
+  }
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    const r = await updateChore(c, { category: picked('ec_cat'), frequency: picked('ec_freq'),
-      every_days: val('ec_every'), times_per_period: val('ec_times') || 1,
-      area: val('ec_area'), pet: val('ec_pet') });
+    const r = d.path
+      ? await updateChore({path:d.path, name:text}, choreChanges(d))
+      : await saveChore({...d, name: text});
     closeSheet(); render();
-    toast(r === 'queued' ? 'Saved on device' : `${c.name} updated`);
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : (d.path ? `${text} updated` : `Added ${text}`));
+    setTimeout(() => refresh(true), 1500);
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
 }
 
-async function submitRemoveChore(i){
-  const c = CHOREREFS[i];
-  if(!c) return toast('Chore not found');
+async function submitRemoveChoreDraft(){
+  const d = CHORE_DRAFT;
   try {
     // Retired, not deleted — active:false is the template's own documented
     // way to drop a chore from view without losing its streak history.
-    const r = await updateChore(c, { active: false });
+    const r = await updateChore({path:d.path, name:d.text}, { active: false });
     closeSheet();
-    toast(r === 'queued' ? 'Saved on device' : `${c.name} removed — pull to refresh to update the list`);
+    toast(r === 'queued' ? 'Saved on device' : `${d.text} removed — pull to refresh to update the list`);
+  } catch(e){ toast('Failed: ' + e.message); }
+}
+
+async function submitDeleteDueChore(){
+  const d = CHORE_DRAFT;
+  try {
+    await deleteDueChore({path:d.path, text:d.text});
+    bump(dd => {
+      dd.life.open_tasks = (dd.life.open_tasks||[]).filter(x => x.path !== d.path);
+      dd.life.completed_tasks = (dd.life.completed_tasks||[]).filter(x => x.path !== d.path);
+    });
+    closeSheet(); render();
+    toast('Deleted');
   } catch(e){ toast('Failed: ' + e.message); }
 }
 
