@@ -230,15 +230,17 @@ const CHORE_FREQ_LABELS = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', e
 const EXEMPTION_KINDS = ['holiday','day_off','event'];
 const EXEMPTION_LABELS = { holiday:'Holiday', day_off:'Day off', event:'Event' };
 
-/* ---- due-date notifications: shared by "Due dates" (Life tab) and,
-   eventually, chores. A notification is one of:
+/* ---- due-date notifications: the due date lives directly on the task or
+   chore it belongs to, never a separate note that just references one (see
+   DUE_DRAFT/sheetAddDue below for tasks; chores carry the same fields on
+   their own note). A notification is one of:
      {kind:'offset', minutes, enabled}          -- N minutes before due_time
      {kind:'anchor', anchor:'wake'|'sleep', mode:'piggyback'|'separate', enabled}
    Stored in frontmatter as compact colon-separated tokens inside a bracketed
    list (this vault's frontmatter parsers only understand flat strings and
    string lists, never nested objects) -- mirrored in build_summary.py
    (pass-through only) and 90 System/push/send.js (which actually fires
-   them). See 40 Life/Reminders/README.md for the token format written out
+   them). See 40 Life/Tasks/README.md for the token format written out
    in full. */
 function parseNotificationToken(tok){
   const parts = String(tok).split(':');
@@ -787,7 +789,15 @@ shown to the person for approval.
   not invent a 1-10 value for it, and never write a word like "low" or "great" into these fields.)
 {"type":"goal_progress","summary":"","goal_id":0,"value":400,"note":""}
 {"type":"task_done","summary":"","task_id":3}
-{"type":"task_add","summary":"","text":"Call the credit union","date":"YYYY-MM-DD"}
+{"type":"task_add","summary":"","text":"Call the credit union","date":"YYYY-MM-DD","due_date":null,"due_recur":null,"due_day":null,"due_time":null}
+  (due_date/due_recur/due_day/due_time are only for a task that genuinely has a
+  due date -- leave all four null for a plain quick task, which is the common
+  case. Set due_date (YYYY-MM-DD) for a one-time due date, or due_recur:
+  "monthly" with due_day (1-31) for something like "the 15th of every month" --
+  never both. due_time, if the person gives one, must round to the nearest
+  half hour -- "around 2" becomes "14:00", "quarter past 9" becomes "09:00" or
+  "09:30", whichever is closer -- because that is the only grid a push can
+  ever actually fire on. Never invent a due date that wasn't said.)
 {"type":"achievement","summary":"","title":"First 10k run","domain":"fitness|finance|life","date":"YYYY-MM-DD","note":""}
 {"type":"chore_done","summary":"","chore":"Feed cats","times":1,"date":"YYYY-MM-DD","note":""}
 {"type":"chore_add","summary":"","name":"Water the plants","category":"home|pets|admin","frequency":"daily|weekly|monthly|every_n_days","times_per_period":1,"every_days":null,"area":"","pet":""}
@@ -816,6 +826,11 @@ Rules that matter:
   no way to scope it to specific ones from here; if the person wants that, tell them
   to narrow it from the Calendar tab instead of guessing which ones they meant.
 - One checkin operation per day at most; merge everything reflective into it.
+- If a new task sounds like it genuinely has a deadline -- a bill, a renewal, a
+  form due back, an appointment -- but the person didn't say when, ask about it
+  in questions instead of leaving it a plain task or guessing a date. Don't ask
+  this for an ordinary loose end with no natural deadline ("call mom back",
+  "look into a new backpack") -- only when the thing itself implies one.
 - Set "done" to true when you have nothing further worth asking.
 - Questions must be answerable in a sentence. Never ask more than three at once.`;
 
@@ -943,6 +958,18 @@ function scale10(v){
   return Number.isFinite(n) && n >= 1 && n <= 10 ? n : '';
 }
 
+/* Same defense-in-depth idea for a dictated due_time -- the prompt asks the
+   model to round to the half hour, but that's the only grid send.js's poll
+   can ever land a push on, so clamp here too rather than trust it alone.
+   An unparseable value becomes blank (no time) rather than a guess. */
+function roundHalfHour(hhmm){
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+  if(!m) return '';
+  const mins = ((parseInt(m[1],10)||0)*60 + (parseInt(m[2],10)||0) + 15) / 30 | 0;
+  const snapped = (mins * 30) % 1440;
+  return `${String(Math.floor(snapped/60)).padStart(2,'0')}:${String(snapped%60).padStart(2,'0')}`;
+}
+
 async function runOp(op){
   const date = op.date || todayISO();
   switch(op.type){
@@ -967,7 +994,17 @@ async function runOp(op){
       return saveGoalProgress({ path:g.path, name:g.name, value:op.value, date, note: op.note || '' });
     }
     case 'task_done':  return completeTask(op.task_id);
-    case 'task_add':   return addTask(op.text, date);
+    case 'task_add': {
+      // A due date makes this a task note (see saveTaskDue) instead of a
+      // plain checklist line -- the common case (no due date) is unchanged.
+      if(op.due_date || op.due_recur){
+        return saveTaskDue({ text: op.text, due_date: op.due_date || '',
+          due_recur: op.due_recur === 'monthly' ? 'monthly' : '',
+          due_day: op.due_day != null ? op.due_day : '',
+          due_time: roundHalfHour(op.due_time), notifications: [] });
+      }
+      return addTask(op.text, date);
+    }
     case 'achievement':return saveAchievement({ title:op.title, domain:op.domain || 'life', date, note:op.note || '' });
     case 'chore_done': {
       const times = Math.max(1, Math.min(6, Number(op.times) || 1));
@@ -983,9 +1020,20 @@ async function runOp(op){
   }
 }
 
+/* A due-date task (kind: 'note') is its own file with a done: frontmatter
+   flag -- setting that is the whole operation, unlike a checklist task's
+   line-editing dance below. */
+async function setTaskNoteDone(t, done){
+  const cur = await getFile(vpath(t.path));
+  if(!cur) throw new Error('Task note missing');
+  const md = setFm(cur.text, 'done', done);
+  return write(vpath(t.path), md, `${done ? 'Done' : 'Reopen'}: ${t.text.slice(0,50)}`, { mode:'update' });
+}
+
 async function completeTask(id){
   const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
   if(!t) throw new Error('Task not found');
+  if(t.kind === 'note') return setTaskNoteDone(t, true);
   const cur = await getFile(vpath(t.path));
   if(!cur) throw new Error('Task file missing');
   const lines = cur.text.split('\n');
@@ -997,11 +1045,13 @@ async function completeTask(id){
   return write(vpath(t.path), lines.join('\n'), `Done: ${t.text.slice(0,50)}`, { mode:'update' });
 }
 
-/* Mirror of completeTask — flips a checked box back open. The same line
-   lookup works in both directions since it matches on text, not check state. */
+/* Mirror of completeTask — flips a checked box back open (or a task note's
+   done flag back to false). The checklist line lookup works in both
+   directions since it matches on text, not check state. */
 async function uncompleteTask(id){
   const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
   if(!t) throw new Error('Task not found');
+  if(t.kind === 'note') return setTaskNoteDone(t, false);
   const cur = await getFile(vpath(t.path));
   if(!cur) throw new Error('Task file missing');
   const lines = cur.text.split('\n');
@@ -1018,13 +1068,27 @@ async function addTask(text, date){
   return mergeWrite(path, 'task_add', {text}, `Add task: ${text.slice(0,50)}`);
 }
 
-function taskRow(t){
-  const done = !!t.done;
+/* A due-date task's due line: "Monthly, day 15" or "2026-08-12", plus a
+   time if one's set. Blank for a plain checklist task -- those never carry
+   due_* fields (see build_summary.py's DUE_DEFAULTS). */
+function taskDueLine(t){
+  if(t.kind !== 'note') return '';
+  const when = t.due_recur === 'monthly' ? `Monthly, day ${t.due_day}` : (t.next_date || t.due_date);
+  return [when, t.due_time].filter(Boolean).join(' · ');
+}
+
+function taskRow(t, opts={}){
+  const done = !!t.done, hasDue = t.kind === 'note', sub = taskDueLine(t);
+  const body = `<div class="m" style="min-width:0;${done?'text-decoration:line-through;color:var(--dim)':''}">${esc(t.text)}</div>${
+    sub ? `<div class="s">${esc(sub)}</div>` : ''}`;
   return `<div class="item">
     <div style="display:flex;gap:11px;align-items:center;flex:1;min-width:0">
       <button class="tick ${done?'on':''}" onclick="toggleTask(${t.id}, this)"
         aria-label="${done?'mark not done':'mark done'}">${done?'✓':''}</button>
-      <div class="m" style="min-width:0;${done?'text-decoration:line-through;color:var(--dim)':''}">${esc(t.text)}</div>
+      ${hasDue
+        ? `<button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0" onclick="sheetEditDue(${t.id})">${body}</button>`
+        : `<div style="min-width:0;flex:1">${body}</div>`}
+      ${t.due_today && !opts.hidePill ? '<span class="pill">today</span>' : ''}
     </div>
   </div>`;
 }
@@ -1096,33 +1160,35 @@ async function saveAchievement(a){
   return write(path, body, `Achievement: ${a.title}`);
 }
 
-/* A one-off or recurring due date with its own notifications — see
-   40 Life/Reminders/README.md for the note format and DUE_DRAFT/
-   sheetAddDue() below for how the app builds one. Editing reuses the
-   original file path (like updateChore) so a title change doesn't also
-   silently rename/duplicate the note. */
-async function saveDueReminder(r){
-  const name = safeName(r.title);
+/* A task with a due date is its own note in 40 Life/Tasks/ -- a plain
+   checklist line (see addTask above) has nowhere to hold a date, a time,
+   or notifications, so a task that needs those becomes a small file
+   instead, the same way a chore or a goal already is one. See
+   40 Life/Tasks/README.md for the note format and DUE_DRAFT/sheetAddDue()
+   below for how the app builds one. Editing reuses the original file path
+   (like updateChore) so a text change doesn't also rename/duplicate it. */
+async function saveTaskDue(t){
+  const name = safeName(t.text);
   if(!name) throw new Error('Needs a title');
-  const path = r.path ? vpath(r.path) : vpath(`40 Life/Reminders/${name}.md`);
-  const monthly = r.due_recur === 'monthly';
+  const path = t.path ? vpath(t.path) : vpath(`40 Life/Tasks/${name}.md`);
+  const monthly = t.due_recur === 'monthly';
   const body = fm({
-    type:'reminder', title:r.title,
-    due_date: monthly ? '' : (r.due_date || todayISO()),
+    type:'task', text:t.text,
+    due_date: monthly ? '' : (t.due_date || todayISO()),
     due_recur: monthly ? 'monthly' : '',
-    due_day: monthly ? r.due_day : '',
-    due_time: r.due_time || '',
-    notifications: (r.notifications || []).map(formatNotificationToken),
-    active:true, tags:['reminder']
+    due_day: monthly ? t.due_day : '',
+    due_time: t.due_time || '',
+    notifications: (t.notifications || []).map(formatNotificationToken),
+    done:false, tags:['task']
   }) + `\n# ${name}\n\nAdded from the phone on ${todayISO()}.\n`;
-  return write(path, body, `${r.path ? 'Update' : 'Add'} due date: ${name}`, { mode:'update' });
+  return write(path, body, `${t.path ? 'Update' : 'Add'} due date: ${name}`, { mode:'update' });
 }
 
-async function deleteDueReminder(r){
-  if(!r.path) throw new Error('Nothing to delete');
-  const cur = await getFile(vpath(r.path));
-  if(!cur) throw new Error('Due date note missing');
-  return deleteFile(vpath(r.path), cur.sha, `Delete due date: ${r.title}`);
+async function deleteTaskDue(t){
+  if(!t.path) throw new Error('Nothing to delete');
+  const cur = await getFile(vpath(t.path));
+  if(!cur) throw new Error('Task note missing');
+  return deleteFile(vpath(t.path), cur.sha, `Delete due date: ${t.text}`);
 }
 
 /* Holiday / day off / event — suppresses due-chores and push reminders for
@@ -1233,6 +1299,9 @@ function viewTalk(){
 
 function opDetail(op){
   const bits = [];
+  if(op.due_recur === 'monthly' && op.due_day) bits.push(`due monthly, day ${op.due_day}`);
+  else if(op.due_date) bits.push(`due ${op.due_date}`);
+  if(op.due_time) bits.push(roundHalfHour(op.due_time));
   if(op.date) bits.push(op.date);
   if(op.start_date) bits.push(op.end_date && op.end_date !== op.start_date
     ? `${op.start_date} → ${op.end_date}` : op.start_date);
@@ -1405,9 +1474,6 @@ function choreRow(c, i){
 
 let CHOREREFS = [];
 function choreRef(c){ CHOREREFS.push(c); return CHOREREFS.length - 1; }
-
-let DUEREFS = [];
-function dueRef(r){ DUEREFS.push(r); return DUEREFS.length - 1; }
 
 async function tickChore(i, btn){
   const c = CHOREREFS[i];
@@ -2041,18 +2107,11 @@ function choresStrip(){
 }
 
 function dueStrip(){
-  const due = ((DATA && DATA.life && DATA.life.reminders) || []).filter(r => r.due_today);
+  const due = ((DATA && DATA.life && DATA.life.open_tasks) || []).filter(t => t.due_today);
   if(!due.length) return '';
   return `<div class="card" style="margin-top:10px">
     <div class="row"><b>Due today</b><span class="sub">${due.length}</span></div>
-    <div class="list" style="margin-top:10px">` + due.map(r => { const i = dueRef(r);
-      return `<div class="item">
-        <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
-          onclick="sheetEditDue(${i})">
-          <div class="m">${esc(r.title)}</div>
-          <div class="s">${r.due_time ? esc(r.due_time) : 'No specific time'}${r.due_recur === 'monthly' ? ' · monthly' : ''}</div>
-        </button>
-      </div>`; }).join('') + `</div></div>`;
+    <div class="list" style="margin-top:10px">` + due.map(t => taskRow(t, {hidePill:true})).join('') + `</div></div>`;
 }
 
 function viewToday(){
@@ -2260,22 +2319,8 @@ function viewLife(){
     <button class="btn" style="width:auto;padding:13px 18px" onclick="submitAddTask(this)">Add</button>
   </div>
   <p class="sub" style="margin-top:8px">Need a due date, a specific time, or its own notifications?
-  <a href="#" onclick="sheetAddDue();return false">Add a due date</a> instead.</p>`;
-  const reminders = d.life.reminders || [];
-  h += `<h2>Due dates</h2>`;
-  h += reminders.length
-    ? `<div class="list">` + reminders.map(r => { const i = dueRef(r);
-        return `<div class="item">
-          <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
-            onclick="sheetEditDue(${i})">
-            <div class="m">${esc(r.title)}</div>
-            <div class="s">${esc(r.due_recur === 'monthly' ? `Monthly, day ${r.due_day}` : r.next_date)}${
-              r.due_time ? ' · ' + esc(r.due_time) : ''}</div>
-          </button>
-          ${r.due_today ? '<span class="pill">today</span>' : ''}
-        </div>`; }).join('') + `</div>`
-    : `<div class="empty">Nothing due. Add one below.</div>`;
-  h += `<button class="btn sec" style="margin-top:10px" onclick="sheetAddDue()">Add a due date</button>`;
+  <a href="#" onclick="sheetAddDue();return false">Add a due date</a> instead — it'll show up in the
+  list above, right alongside everything else.</p>`;
   if(d.life.days && d.life.days.length){
     h += `<h2>Recent days</h2><div class="list">` + d.life.days.slice(0,14).map(x => { const i = dayRef(x);
       return `<div class="item">
@@ -2430,7 +2475,6 @@ function render(){
   CHOREREFS = [];
   WORKOUTREFS = [];
   DAYREFS = [];
-  DUEREFS = [];
   $('#app').innerHTML = (VIEWS[view] || viewToday)();
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
   $('#app').scrollTop = 0; // #app is the scrolling element now, not window — see its CSS rule
@@ -2820,7 +2864,7 @@ async function submitGoal(btn, i){
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save progress'; }
 }
 
-/* ---- due dates ("Reminder" notes) ---- */
+/* ---- due-date tasks ---- */
 
 // Draft state for the Add/Edit Due date sheet — kept outside the DOM
 // (like PENDING/CHAT elsewhere in this file) because renderDueSheet()
@@ -2830,7 +2874,7 @@ async function submitGoal(btn, i){
 let DUE_DRAFT = null;
 
 function blankDueDraft(){
-  return { path:'', title:'', due_date: todayISO(), due_recur:'', due_day:'', due_time:'', notifications:[] };
+  return { path:'', text:'', due_date: todayISO(), due_recur:'', due_day:'', due_time:'', notifications:[] };
 }
 
 function sheetAddDue(){
@@ -2838,12 +2882,14 @@ function sheetAddDue(){
   renderDueSheet();
 }
 
-function sheetEditDue(i){
-  const r = DUEREFS[i];
-  if(!r) return toast('Not found');
-  DUE_DRAFT = { path:r.path, title:r.title, due_date:r.due_date || todayISO(),
-    due_recur:r.due_recur || '', due_day: r.due_day != null ? String(r.due_day) : '',
-    due_time:r.due_time || '', notifications: parseNotifications(r.notifications) };
+// Looks the task up in DATA.life.open_tasks by id rather than a separate
+// ref array (like CHOREREFS) — open_tasks is already exactly that list.
+function sheetEditDue(id){
+  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  if(!t) return toast('Not found');
+  DUE_DRAFT = { path:t.path, text:t.text, due_date:t.due_date || todayISO(),
+    due_recur:t.due_recur || '', due_day: t.due_day != null ? String(t.due_day) : '',
+    due_time:t.due_time || '', notifications: parseNotifications(t.notifications) };
   renderDueSheet();
 }
 
@@ -2854,8 +2900,8 @@ function renderDueSheet(){
   const monthly = d.due_recur === 'monthly';
   NOTIF_EDITOR = { list: d.notifications, allowOffset: !!d.due_time, onChange: renderDueSheet };
   openSheet(`<h1 style="font-size:22px">${d.path ? 'Edit due date' : 'Add a due date'}</h1>
-    <label>Title</label><input id="due_title" value="${esc(d.title)}" placeholder="Renew car registration"
-      autocapitalize="sentences" oninput="DUE_DRAFT.title=this.value">
+    <label>Title</label><input id="due_title" value="${esc(d.text)}" placeholder="Renew car registration"
+      autocapitalize="sentences" oninput="DUE_DRAFT.text=this.value">
     <label>Repeats</label>
     <div class="chips">
       <button type="button" class="chip ${!monthly?'on':''}" onclick="setDueRecur('')">One time</button>
@@ -2882,15 +2928,15 @@ function renderDueSheet(){
 }
 
 async function submitDue(btn){
-  const title = val('due_title');
-  if(!title) return toast('Give it a title');
+  const text = val('due_title');
+  if(!text) return toast('Give it a title');
   if(DUE_DRAFT.due_recur === 'monthly'){
     const day = parseInt(DUE_DRAFT.due_day, 10);
     if(!day || day < 1 || day > 31) return toast('Day of month must be 1-31');
   }
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    const r = await saveDueReminder({ ...DUE_DRAFT, title });
+    const r = await saveTaskDue({ ...DUE_DRAFT, text });
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Due date saved');
     setTimeout(() => refresh(true), 1500);
@@ -2900,7 +2946,7 @@ async function submitDue(btn){
 async function submitDeleteDue(btn){
   btn.disabled = true; btn.textContent = 'Deleting…';
   try {
-    await deleteDueReminder(DUE_DRAFT);
+    await deleteTaskDue(DUE_DRAFT);
     closeSheet(); render();
     toast('Deleted');
     setTimeout(() => refresh(true), 1500);
