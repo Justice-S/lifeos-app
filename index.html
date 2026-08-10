@@ -1279,17 +1279,23 @@ async function submitGoal(btn, i){
 
 /* ============================ settings actions ============================ */
 
-function saveSettings(){
+function readSettingsForm(){
   const sel = id => { const n = document.getElementById(id); return n ? n.value : ''; };
-  saveCfg({ owner: val('s_owner'), repo: val('s_repo'), branch: val('s_branch') || 'main',
+  return { owner: val('s_owner'), repo: val('s_repo'), branch: val('s_branch') || 'main',
     vaultPath: val('s_vault'), token: val('s_token'), vapid: val('s_vapid'),
     anthropicKey: val('s_akey') || cfg().anthropicKey,
-    model: sel('s_model') || cfg().model, depth: sel('s_depth') || cfg().depth });
+    model: sel('s_model') || cfg().model, depth: sel('s_depth') || cfg().depth };
+}
+
+function saveSettings(){
+  saveCfg(readSettingsForm());
   toast('Saved'); refresh(true);
 }
 
 async function testConn(){
   try {
+    saveCfg(readSettingsForm()); // Test must use what's on screen, not just the last Save
+    if(!configured()) return toast('Failed: fill in username, repo, and token first');
     const r = await gh('');
     if(!r) return toast('Repo not found — check the name');
     const f = await getFile(vpath('90 System/summary.json'));
