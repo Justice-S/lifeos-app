@@ -898,7 +898,12 @@ async function saveAchievement(a){
 
 /* Holiday / day off / event — suppresses due-chores and push reminders for
    every date from start_date through end_date, inclusive. See update_chores.py
-   and send.js, which both read these notes to decide what to skip. */
+   and send.js, which both read these notes to decide what to skip.
+   schedule (workday/weekend, send.js only) overrides which notification
+   schedule applies for the date regardless of the actual day of the week.
+   suppress:false makes it a "schedule only" exemption — it stops counting
+   as a blanket notification-suppressor just because chores/notifications
+   are empty, which they otherwise always mean. */
 async function saveExemption(e){
   const label = safeName(e.note || EXEMPTION_LABELS[e.kind] || e.kind);
   const path = vpath(`40 Life/Exemptions/${e.start_date} ${label}.md`);
@@ -906,6 +911,7 @@ async function saveExemption(e){
   // send.js both treat an absent/empty list that way.
   const body = fm({ type:'exemption', kind:e.kind, start_date:e.start_date, end_date:e.end_date,
     chores: e.chores || [], notifications: e.notifications || [],
+    schedule: e.schedule || '', suppress: e.suppress === false ? false : true,
     note: e.note || '', tags:['exemption'] }) + `\n# ${label}\n\nAdded from the phone on ${todayISO()}.\n`;
   return write(path, body, `Exemption: ${label}`, { mode:'update' });
 }
@@ -1338,7 +1344,8 @@ function viewCalendar(){
     ? `<div class="list">` + ex.map((e, i) => `<div class="item">
         <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
           onclick="sheetEditExemption(${i})">
-        <div class="m">${esc(e.note || EXEMPTION_LABELS[e.kind] || e.kind)}</div>
+        <div class="m">${esc(e.note || EXEMPTION_LABELS[e.kind] || e.kind)}${
+          e.schedule ? ` <span class="pill">${esc(SCHEDULE_OVERRIDE_LABELS[e.schedule] || e.schedule)}</span>` : ''}</div>
         <div class="s">${esc(EXEMPTION_LABELS[e.kind] || e.kind)} · ${esc(e.start_date)}${
           e.end_date !== e.start_date ? ' → ' + esc(e.end_date) : ''} · ${esc(exemptionScopeLabel(e))}</div>
         </button>
@@ -1469,6 +1476,23 @@ const FREQ_DISPLAY = { daily:'Daily', weekdays:'Weekdays', weekends:'Weekends', 
 const WEEKDAYS = ['0','1','2','3','4','5','6'];
 const WEEKDAY_LABELS = { '0':'Sun', '1':'Mon', '2':'Tue', '3':'Wed', '4':'Thu', '5':'Fri', '6':'Sat' };
 
+// 30-minute increments, in minutes — how much of the tail end of the work
+// day stays open for notifications despite the deadzone. 'off' disables
+// the deadzone entirely (send.js's workDeadzoneUtc treats an unset
+// work_buffer_min the same way).
+const WORK_BUFFER_OPTIONS = ['off','0','30','60','90','120','150','180','210','240'];
+function workBufferLabel(v){
+  if(v === 'off') return 'Off';
+  const n = Number(v);
+  if(n === 0) return 'None';
+  const h = Math.floor(n/60), m = n%60;
+  return (h ? h+'h' : '') + (m ? (h?' ':'')+m+'m' : '');
+}
+const WORK_BUFFER_LABELS = Object.fromEntries(WORK_BUFFER_OPTIONS.map(v => [v, workBufferLabel(v)]));
+
+const SCHEDULE_OVERRIDES = ['', 'workday', 'weekend'];
+const SCHEDULE_OVERRIDE_LABELS = { '': 'Normal', workday: 'Workday', weekend: 'Weekend' };
+
 function reminderScheduleLabel(r){
   if(r.anchor === 'fixed') return `${r.time || '—'} local`;
   const off = Number(r.offset_min || 0);
@@ -1479,6 +1503,9 @@ function renderScheduleSection(){
   if(!REMINDER_CFG) return `<div class="card"><span class="sub">Loading…</span></div>`;
   const rc = REMINDER_CFG;
   const ev = rc.events || {};
+  const we = rc.weekend_events || {};
+  const workDays = (Array.isArray(rc.work_days) ? rc.work_days : [1,2,3,4,5]).map(String);
+  const buffer = (rc.work_buffer_min === null || rc.work_buffer_min === undefined) ? 'off' : String(rc.work_buffer_min);
   let h = `<div class="card">
     <label>Timezone offset from UTC, in hours</label>
     <input id="sch_tz" type="text" inputmode="numeric" value="${esc(rc.timezone_offset_hours ?? 0)}" placeholder="-5">
@@ -1488,6 +1515,18 @@ function renderScheduleSection(){
     <label>Sleep</label><input id="sch_sleep" type="time" value="${esc(ev.sleep || '')}">
     <label>Start work</label><input id="sch_work_start" type="time" value="${esc(ev.work_start || '')}">
     <label>End work</label><input id="sch_work_end" type="time" value="${esc(ev.work_end || '')}">
+    <label>Work days</label>${multiChipRow('sch_workdays', WEEKDAYS, WEEKDAY_LABELS, workDays)}
+    <label>Notification deadzone during work hours</label>
+    ${chipRow('sch_buffer', WORK_BUFFER_OPTIONS, buffer, WORK_BUFFER_LABELS)}
+    <p class="sub" style="margin-top:6px">On a work day, reminders stay quiet from start of work until
+    this much time is left before work ends — "1h 30m" opens the last hour and a half back up. Doesn't
+    affect any day not checked above. "Off" turns this off entirely.</p>
+    <label>Weekend wake up <span style="text-transform:none">(optional — falls back to the weekday time above)</span></label>
+    <input id="sch_wake_wknd" type="time" value="${esc(we.wake || '')}">
+    <label>Weekend sleep <span style="text-transform:none">(optional — falls back to the weekday time above)</span></label>
+    <input id="sch_sleep_wknd" type="time" value="${esc(we.sleep || '')}">
+    <p class="sub" style="margin-top:6px">Applies on any day not checked under Work days above — not
+    hardcoded to Saturday/Sunday, so this still makes sense if your work days ever change.</p>
     <button class="btn" style="margin-top:12px" onclick="submitScheduleEvents(this)">Save schedule</button>
   </div>`;
 
@@ -1513,6 +1552,11 @@ async function submitScheduleEvents(btn){
   cfg.timezone_offset_hours = parseInt(val('sch_tz'), 10) || 0;
   cfg.events = { wake: val('sch_wake'), sleep: val('sch_sleep'),
     work_start: val('sch_work_start'), work_end: val('sch_work_end') };
+  cfg.work_days = pickedMulti('sch_workdays').map(Number);
+  const buf = picked('sch_buffer');
+  cfg.work_buffer_min = (!buf || buf === 'off') ? null : Number(buf);
+  const wknWake = val('sch_wake_wknd'), wknSleep = val('sch_sleep_wknd');
+  cfg.weekend_events = (wknWake || wknSleep) ? { wake: wknWake, sleep: wknSleep } : undefined;
   try {
     const r = await saveReminderConfig(cfg);
     REMINDER_CFG = cfg;
@@ -1572,11 +1616,18 @@ async function sheetAddExemption(prefill){
     <label>Start date</label><input id="ex_start" type="date" value="${dt}">
     <label>End date</label><input id="ex_end" type="date" value="${dt}">
     <label>Note (optional)</label><input id="ex_note" placeholder="e.g. Christmas, vacation">
+    <label>Schedule override (optional)</label>${chipRow('ex_schedule', SCHEDULE_OVERRIDES, '', SCHEDULE_OVERRIDE_LABELS)}
+    <p class="sub" style="margin-top:4px">Treats these dates as a workday or a weekend for notification
+    timing — the work-hours deadzone and weekend wake/sleep times in Settings → Schedule — regardless
+    of what day of the week they actually fall on.</p>
     <label>Scope</label>
     <div class="chips" id="ex_scope">
       <button type="button" class="chip on" data-v="everything" onclick="setExemptScope(this)">Everything</button>
       <button type="button" class="chip" data-v="specific" onclick="setExemptScope(this)">Specific items</button>
+      <button type="button" class="chip" data-v="schedule_only" onclick="setExemptScope(this)">Schedule only</button>
     </div>
+    <p class="sub" style="margin-top:4px" id="ex_scope_hint">Chores and reminders are skipped entirely
+    on these days.</p>
     <div id="ex_specific_wrap" class="hide">
       ${chores.length ? `<label>Chores due${dt===todayISO()?'':' (all active — none scheduled for this date yet)'}</label>
         ${multiChipRow('ex_chores', chores.map(c => c.name))}` : `<p class="sub">No active chores to narrow down.</p>`}
@@ -1587,10 +1638,19 @@ async function sheetAddExemption(prefill){
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
 }
 
+const EX_SCOPE_HINTS = {
+  everything: 'Chores and reminders are skipped entirely on these days.',
+  specific: 'Only the items picked below are skipped — everything else runs normally.',
+  schedule_only: "Nothing is skipped. Only useful with a schedule override set above — "
+    + "it changes the notification schedule for these days without muting anything.",
+};
+
 function setExemptScope(btn){
   document.querySelectorAll('#ex_scope .chip').forEach(c => c.classList.remove('on'));
   btn.classList.add('on');
   document.getElementById('ex_specific_wrap').classList.toggle('hide', btn.dataset.v !== 'specific');
+  const hint = document.getElementById('ex_scope_hint');
+  if(hint) hint.textContent = EX_SCOPE_HINTS[btn.dataset.v] || '';
 }
 
 async function submitAddExemption(btn){
@@ -1598,18 +1658,23 @@ async function submitAddExemption(btn){
   const end = val('ex_end') || start;
   const kind = picked('ex_kind') || 'holiday';
   const note = val('ex_note');
-  const specific = document.querySelector('#ex_scope .chip.on').dataset.v === 'specific';
+  const schedule = picked('ex_schedule');
+  const scope = document.querySelector('#ex_scope .chip.on').dataset.v;
+  const specific = scope === 'specific';
+  const suppress = scope !== 'schedule_only';
   const chores = specific ? pickedMulti('ex_chores') : [];
   const notifications = specific ? pickedMulti('ex_notifs') : [];
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    const r = await saveExemption({ kind, start_date: start, end_date: end, note, chores, notifications });
+    const r = await saveExemption({ kind, start_date: start, end_date: end, note, chores, notifications,
+      schedule, suppress });
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Exemption added');
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
 }
 
 function exemptionScopeLabel(e){
+  if(e.suppress === false) return 'schedule only';
   const scope = [
     (e.chores||[]).length ? `${e.chores.length} chore${e.chores.length>1?'s':''}` : '',
     (e.notifications||[]).length ? `${e.notifications.length} reminder${e.notifications.length>1?'s':''}` : ''
@@ -1622,9 +1687,10 @@ function sheetEditExemption(i){
   if(!e) return toast('Not found');
   openSheet(`<h1 style="font-size:22px">${esc(e.note || EXEMPTION_LABELS[e.kind] || e.kind)}</h1>
     <p class="sub">${esc(EXEMPTION_LABELS[e.kind] || e.kind)} · ${esc(e.start_date)}${
-      e.end_date !== e.start_date ? ' → ' + esc(e.end_date) : ''} · scoped to ${esc(exemptionScopeLabel(e))}</p>
-    <p class="sub" style="margin-top:10px">To change dates, kind, or scope, edit the note directly in
-    Obsidian — from here you can only remove it.</p>
+      e.end_date !== e.start_date ? ' → ' + esc(e.end_date) : ''} · scoped to ${esc(exemptionScopeLabel(e))}${
+      e.schedule ? ` · schedule: ${esc(SCHEDULE_OVERRIDE_LABELS[e.schedule] || e.schedule)}` : ''}</p>
+    <p class="sub" style="margin-top:10px">To change dates, kind, scope, or schedule, edit the note
+    directly in Obsidian — from here you can only remove it.</p>
     <button class="btn danger" style="margin-top:18px" onclick="removeExemption(${i})">Remove exemption</button>
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
 }
@@ -2145,10 +2211,13 @@ const picked = id => { const n = document.querySelector('#'+id+' .chip.on'); ret
 
 /* Multi-select variant of chipRow — each chip toggles independently instead
    of being mutually exclusive. Used for exemption scoping (pick specific
-   chores/notifications rather than one value). */
-function multiChipRow(id, opts, labels){
+   chores/notifications rather than one value) and for work-day selection.
+   sel pre-checks a subset of opts — omit it for the exemption-sheet's usual
+   add-only, nothing-pre-selected case. */
+function multiChipRow(id, opts, labels, sel){
+  const picked = new Set(sel || []);
   return `<div class="chips" id="${id}">` + opts.map(o =>
-    `<button type="button" class="chip" data-v="${esc(o)}"
+    `<button type="button" class="chip ${picked.has(o)?'on':''}" data-v="${esc(o)}"
       onclick="this.classList.toggle('on')">${esc((labels && labels[o]) || o)}</button>`).join('') + `</div>`;
 }
 const pickedMulti = id => Array.from(document.querySelectorAll('#'+id+' .chip.on')).map(b => b.dataset.v);
