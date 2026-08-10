@@ -474,6 +474,32 @@ function appendSection(md, heading, text){
   return before + `\n\n${text}\n\n` + md.slice(insertAt);
 }
 
+/* Read a frontmatter key back out — the read-side counterpart to setFm.
+   Used to pre-fill an edit sheet with a note's current values before an
+   overwrite-style save (e.g. workoutNote()) would otherwise blank them. */
+function getFm(md, key){
+  if(!md.startsWith('---')) return '';
+  const end = md.indexOf('\n---', 3);
+  const head = end < 0 ? md : md.slice(0, end);
+  const m = new RegExp('^' + key + ':\\s*(.*)$', 'm').exec(head);
+  if(!m) return '';
+  let v = m[1].trim();
+  if(v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1).replace(/\\"/g, '"');
+  return v;
+}
+
+/* Read a "## Heading" section's body back out — the read-side counterpart
+   to appendSection. */
+function readSection(md, heading){
+  const re = new RegExp('^## ' + heading.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\s*$', 'm');
+  const m = md.match(re);
+  if(!m) return '';
+  const start = m.index + m[0].length;
+  const nextIdx = md.slice(start).search(/^## /m);
+  const end = nextIdx === -1 ? md.length : start + nextIdx;
+  return md.slice(start, end).replace(/^[-*][ \t]*(\[[ xX]\][ \t]*)?/gm, '').trim();
+}
+
 /* ============================ actions ============================ */
 
 async function saveExpense(f){
@@ -1814,10 +1840,15 @@ function viewFitness(){
   const gs = (d.life.goals||[]).filter(g => g.domain==='fitness' && g.status==='active');
   if(gs.length) h += `<h2>Fitness goals</h2>` + gs.map(g => goalCard(g)).join('');
   if(f.recent && f.recent.length){
-    h += `<h2>Recent sessions</h2><div class="list">` + f.recent.slice(0,20).map(w =>
-      `<div class="item"><div><div class="m">${esc(w.activity)}</div>
-       <div class="s">${esc(w.date)} · ${esc(w.intensity||'')}</div></div>
-       <div class="amt">${w.duration_min}m</div></div>`).join('') + `</div>`;
+    h += `<h2>Recent sessions</h2><div class="list">` + f.recent.slice(0,20).map(w => { const i = workoutRef(w);
+      return `<div class="item">
+        <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+          onclick="sheetEditWorkout(${i})">
+          <div class="m">${esc(w.activity)}</div>
+          <div class="s">${esc(w.date)} · ${esc(w.intensity||'')}</div>
+        </button>
+        <div class="amt">${w.duration_min}m</div>
+      </div>`; }).join('') + `</div>`;
   }
   if(f.metrics && f.metrics.length){
     h += `<h2>Body metrics</h2><div class="list">` + f.metrics.slice(0,10).map(m =>
@@ -1863,10 +1894,15 @@ function viewLife(){
     <button class="btn" style="width:auto;padding:13px 18px" onclick="submitAddTask(this)">Add</button>
   </div>`;
   if(d.life.days && d.life.days.length){
-    h += `<h2>Recent days</h2><div class="list">` + d.life.days.slice(0,14).map(x =>
-      `<div class="item"><div><div class="m">${esc(x.date)}</div>
-       <div class="s">${[x.mood?'mood '+x.mood:'', x.sleep_hours?x.sleep_hours+'h sleep':''].filter(Boolean).join(' · ')||'—'}</div></div>
-       <div class="amt">${x.day_rating? x.day_rating+'/10' : '—'}</div></div>`).join('') + `</div>`;
+    h += `<h2>Recent days</h2><div class="list">` + d.life.days.slice(0,14).map(x => { const i = dayRef(x);
+      return `<div class="item">
+        <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+          onclick="sheetEditDay(${i})">
+          <div class="m">${esc(x.date)}</div>
+          <div class="s">${[x.mood?'mood '+x.mood:'', x.sleep_hours?x.sleep_hours+'h sleep':''].filter(Boolean).join(' · ')||'—'}</div>
+        </button>
+        <div class="amt">${x.day_rating? x.day_rating+'/10' : '—'}</div>
+      </div>`; }).join('') + `</div>`;
   }
   if(d.life.achievements && d.life.achievements.length){
     h += `<h2>Achievements</h2><div class="list">` + d.life.achievements.map(a =>
@@ -1967,6 +2003,8 @@ const VIEWS = { today:viewToday, chores:viewChores, talk:viewTalk, money:viewMon
 function render(){
   GOALREFS = [];
   CHOREREFS = [];
+  WORKOUTREFS = [];
+  DAYREFS = [];
   $('#app').innerHTML = (VIEWS[view] || viewToday)();
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
   window.scrollTo(0,0);
@@ -2173,6 +2211,60 @@ async function submitWorkout(btn){
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
 }
 
+let WORKOUTREFS = [];
+function workoutRef(w){ WORKOUTREFS.push(w); return WORKOUTREFS.length - 1; }
+
+/* Edit an existing session. Async, unlike sheetEditChore — workoutNote()
+   fully regenerates the file body rather than patching single fields, so
+   distance/note have to be read off the real file first or saving would
+   silently blank whichever of them the summary feed doesn't carry (it only
+   has date/activity/duration_min/intensity/path). Date and activity stay
+   fixed: both are baked into the filename, and changing either here would
+   either miss the file or leave an orphan behind. */
+async function sheetEditWorkout(i){
+  const w = WORKOUTREFS[i];
+  if(!w) return toast('Workout not found');
+  openSheet(`<h1 style="font-size:22px">${esc(w.activity)}</h1><p class="sub">Loading…</p>`);
+  let cur;
+  try { cur = await getFile(w.path); } catch(e){ /* fall through to the not-found message below */ }
+  if(!cur){
+    openSheet(`<h1 style="font-size:22px">${esc(w.activity)}</h1>
+      <p class="sub">Couldn't load this entry — it may not have finished syncing yet.</p>
+      <button class="btn sec" style="margin-top:12px" onclick="closeSheet()">Close</button>`);
+    return;
+  }
+  const distance = getFm(cur.text, 'distance_mi');
+  const note = readSection(cur.text, 'How it felt');
+  openSheet(`<h1 style="font-size:22px">${esc(w.activity)}</h1>
+    <p class="sub">${esc(w.date)} — to change the activity or date, edit the note directly in Obsidian.</p>
+    <label>Minutes</label><input id="ew_dur" class="big" type="text" inputmode="numeric" value="${esc(w.duration_min)}">
+    <label>Intensity</label>${chipRow('ew_int', INTENSITY, w.intensity || 'moderate')}
+    <label>Distance in miles (optional)</label><input id="ew_dist" type="text" inputmode="decimal" value="${esc(distance)}">
+    <label>How it felt</label><textarea id="ew_note" placeholder="Two sentences is plenty.">${esc(note)}</textarea>
+    <button class="btn" style="margin-top:18px" onclick="submitEditWorkout(this, ${i})">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitEditWorkout(btn, i){
+  const w = WORKOUTREFS[i];
+  if(!w) return toast('Workout not found');
+  const duration_min = parseInt(val('ew_dur'), 10);
+  if(!duration_min || duration_min <= 0) return toast('How many minutes?');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const intensity = picked('ew_int') || 'moderate';
+    const body = workoutNote({ date: w.date, activity: w.activity, duration_min,
+      intensity, distance_mi: val('ew_dist'), note: val('ew_note') });
+    const r = await write(w.path, body, `Update workout: ${w.activity} ${w.date}`, { mode:'update' });
+    bump(d => {
+      const x = (d.fitness.recent || []).find(y => y.path === w.path);
+      if(x){ x.duration_min = duration_min; x.intensity = intensity; }
+    });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device' : 'Workout updated');
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
 function sheetCheckin(){
   openSheet(`<h1 style="font-size:22px">Check in</h1>
     <label>Date</label><input id="c_date" type="date" value="${todayISO()}">
@@ -2195,6 +2287,55 @@ async function submitCheckin(btn){
       focus: val('c_focus'), journal: val('c_journal'), win: val('c_win'), weight_lbs: '' });
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Check-in saved');
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+let DAYREFS = [];
+function dayRef(x){ DAYREFS.push(x); return DAYREFS.length - 1; }
+
+/* Edit an existing day's numbers. Synchronous, unlike sheetEditWorkout —
+   mood/energy/sleep/rating are frontmatter set through setFm, which patches
+   one key without touching the rest of the file, so the summary feed's
+   values are already exactly what's on disk; nothing needs fetching first.
+   Journal/win go through appendSection like a normal check-in — they add to
+   the day rather than replace it, since a day can carry more than one
+   journal entry and there's no single "current" one to pre-fill. */
+function sheetEditDay(i){
+  const x = DAYREFS[i];
+  if(!x) return toast('Day not found');
+  const scale = ['1','2','3','4','5','6','7','8','9','10'];
+  openSheet(`<h1 style="font-size:22px">${esc(x.date)}</h1>
+    <p class="sub">Mood, energy, sleep, and rating update this day directly. Journal and a win
+    add to what's already there instead of replacing it.</p>
+    <label>Mood, 1 to 10</label>${chipRow('ed_mood', scale, x.mood != null ? String(x.mood) : '')}
+    <label>Energy, 1 to 10</label>${chipRow('ed_energy', scale, x.energy != null ? String(x.energy) : '')}
+    <label>Hours slept</label><input id="ed_sleep" type="text" inputmode="decimal" value="${esc(x.sleep_hours ?? '')}">
+    <label>Rate the day, 1 to 10</label>${chipRow('ed_rating', scale, x.day_rating != null ? String(x.day_rating) : '')}
+    <label>Add to journal</label><textarea id="ed_journal" placeholder="What happened, what you noticed."></textarea>
+    <label>Add a win</label><input id="ed_win" placeholder="However small.">
+    <button class="btn" style="margin-top:18px" onclick="submitEditDay(this, ${i})">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitEditDay(btn, i){
+  const x = DAYREFS[i];
+  if(!x) return toast('Day not found');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const mood = picked('ed_mood'), energy = picked('ed_energy'), rating = picked('ed_rating'),
+          sleep = val('ed_sleep');
+    const r = await saveCheckin({ date: x.date, mood, energy, sleep_hours: sleep, day_rating: rating,
+      focus: '', journal: val('ed_journal'), win: val('ed_win'), weight_lbs: '' });
+    bump(d => {
+      const y = (d.life.days || []).find(z => z.path === x.path);
+      if(!y) return;
+      if(mood) y.mood = Number(mood);
+      if(energy) y.energy = Number(energy);
+      if(rating) y.day_rating = Number(rating);
+      if(sleep) y.sleep_hours = Number(sleep);
+    });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device' : 'Day updated');
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
 }
 
