@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#0d1117">
+<meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="LifeOS">
@@ -12,8 +12,8 @@
 <title>LifeOS</title>
 <style>
 :root{
-  --bg:#0d1117; --panel:#161b22; --panel2:#1c232c; --line:#2a3038;
-  --text:#e6edf3; --dim:#8b949e; --accent:#4c9aff; --good:#3fb950;
+  --bg:#000000; --panel:#141414; --panel2:#1e1e1e; --line:#2c2c2c;
+  --text:#f2f2f2; --dim:#9a9a9a; --accent:#ff8a3d; --ink:#1a0f05; --good:#3fb950;
   --warn:#d29922; --bad:#f85149; --radius:14px;
   --safe-top:env(safe-area-inset-top); --safe-bot:env(safe-area-inset-bottom);
 }
@@ -36,15 +36,15 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);
 .muted{color:var(--dim)}
 .good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
-.btn{background:var(--accent);color:#06121f;font-weight:650;border-radius:12px;padding:14px;width:100%;font-size:16px}
+.btn{background:var(--accent);color:var(--ink);font-weight:650;border-radius:12px;padding:14px;width:100%;font-size:16px}
 .btn.sec{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
 .btn.danger{background:transparent;color:var(--bad);border:1px solid var(--line)}
 .btn:active{opacity:.7}
 .quick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
 .quick button{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 12px;text-align:left}
 .quick .e{font-size:20px;display:block;margin-bottom:6px}
-.quick .t{font-weight:600;font-size:15px}
-.quick .d{font-size:12px;color:var(--dim)}
+.quick .t{font-weight:600;font-size:15px;display:block}
+.quick .d{font-size:12px;color:var(--dim);display:block;margin-top:2px}
 .list{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--panel)}
 .item{display:flex;justify-content:space-between;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);font-size:15px}
 .item:last-child{border-bottom:none}
@@ -54,12 +54,20 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 .bar>i{display:block;height:100%;background:var(--accent)}
 .nudge{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.35);color:#f0c674;
   border-radius:12px;padding:11px 13px;margin-bottom:8px;font-size:14px}
-nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(13,17,23,.93);
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(0,0,0,.93);
   backdrop-filter:blur(16px);border-top:1px solid var(--line);padding-bottom:var(--safe-bot);z-index:50}
 nav button{flex:1;padding:9px 0 7px;font-size:10px;color:var(--dim);display:flex;flex-direction:column;
   align-items:center;gap:3px}
 nav button.on{color:var(--accent)}
 nav .i{font-size:18px;line-height:1}
+/* the center tab (Today) sits raised above the bar in its own accent badge,
+   so it reads as the app's anchor point rather than one option among seven */
+nav button.center{font-weight:700;color:var(--text)}
+nav button.center.on{color:var(--accent)}
+nav button.center .badge{width:44px;height:44px;border-radius:50%;background:var(--accent);
+  display:flex;align-items:center;justify-content:center;margin-top:-20px;
+  box-shadow:0 4px 14px rgba(255,138,61,.45);border:3px solid var(--bg)}
+nav button.center .badge .i{font-size:20px;line-height:1;color:var(--ink)}
 .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;align-items:flex-end}
 .sheet.on{display:flex}
 .sheet>div{background:var(--bg);width:100%;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;
@@ -82,7 +90,7 @@ textarea{min-height:88px;resize:vertical}
 .big{font-size:30px;font-weight:650;text-align:center;letter-spacing:-1px}
 .chips{display:flex;flex-wrap:wrap;gap:7px}
 .chip{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:8px 13px;font-size:14px}
-.chip.on{background:var(--accent);color:#06121f;border-color:var(--accent);font-weight:600}
+.chip.on{background:var(--accent);color:var(--ink);border-color:var(--accent);font-weight:600}
 .pill{font-size:11px;padding:3px 8px;border-radius:20px;background:var(--panel2);color:var(--dim)}
 .status{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:6px}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--dim)}
@@ -94,11 +102,11 @@ textarea{min-height:88px;resize:vertical}
 .empty{color:var(--dim);text-align:center;padding:30px 16px;font-size:14px}
 .hide{display:none!important}
 .bubble{border-radius:16px;padding:11px 14px;margin-bottom:8px;font-size:15px;max-width:88%;line-height:1.45}
-.bubble.me{background:var(--accent);color:#06121f;margin-left:auto;border-bottom-right-radius:5px}
+.bubble.me{background:var(--accent);color:var(--ink);margin-left:auto;border-bottom-right-radius:5px}
 .bubble.ai{background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:5px}
 .tick{width:24px;height:24px;min-width:24px;border-radius:7px;border:1px solid var(--line);
   background:var(--panel2);font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center}
-.tick.on{background:var(--accent);color:#06121f;border-color:var(--accent);font-weight:700}
+.tick.on{background:var(--accent);color:var(--ink);border-color:var(--accent);font-weight:700}
 .sparkrow{display:flex;align-items:flex-end;gap:3px;height:44px;margin-top:10px}
 .sparkrow>i{flex:1;background:var(--accent);border-radius:2px 2px 0 0;min-height:2px;opacity:.85}
 #pull{position:fixed;top:0;left:0;right:0;height:0;overflow:hidden;z-index:40;
@@ -117,10 +125,10 @@ textarea{min-height:88px;resize:vertical}
 <div id="app"></div>
 
 <nav id="nav">
-  <button data-v="today" class="on"><span class="i">☀️</span>Today</button>
   <button data-v="chores"><span class="i">🧹</span>Chores</button>
   <button data-v="talk"><span class="i">🎙️</span>Update</button>
   <button data-v="money"><span class="i">💵</span>Money</button>
+  <button data-v="today" class="center on"><span class="badge"><span class="i">☀️</span></span>Today</button>
   <button data-v="fitness"><span class="i">🏃</span>Fitness</button>
   <button data-v="life"><span class="i">🎯</span>Life</button>
   <button data-v="settings"><span class="i">⚙️</span>Settings</button>
@@ -160,6 +168,8 @@ const CATEGORIES = ['Groceries','Dining','Transport','Housing','Utilities','Heal
   'Fees & Interest','Savings','Income','Uncategorized'];
 const ACTIVITIES = ['Lifting','Run','Walk','Cycle','Swim','Yoga','Climb','Sport','Mobility','Other'];
 const INTENSITY = ['easy','moderate','hard','max'];
+const CHORE_CATEGORIES = ['home','pets','admin'];
+const CHORE_FREQS = ['daily','weekly','monthly','every_n_days'];
 
 /* ============================ tiny helpers ============================ */
 
@@ -685,6 +695,22 @@ async function completeTask(id){
   return write(vpath(t.path), lines.join('\n'), `Done: ${t.text.slice(0,50)}`, { mode:'update' });
 }
 
+/* Mirror of completeTask — flips a checked box back open. The same line
+   lookup works in both directions since it matches on text, not check state. */
+async function uncompleteTask(id){
+  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  if(!t) throw new Error('Task not found');
+  const cur = await getFile(vpath(t.path));
+  if(!cur) throw new Error('Task file missing');
+  const lines = cur.text.split('\n');
+  let hit = -1;
+  if(lines[t.line] && lines[t.line].includes(t.text)) hit = t.line;
+  else hit = lines.findIndex(l => /^\s*[-*]\s*\[[xX]\]/.test(l) && l.includes(t.text));
+  if(hit < 0) throw new Error('Could not find that task line');
+  lines[hit] = lines[hit].replace(/\[[xX]\]/, '[ ]');
+  return write(vpath(t.path), lines.join('\n'), `Reopen: ${t.text.slice(0,50)}`, { mode:'update' });
+}
+
 async function addTask(text, date){
   const path = vpath(`10 Daily/${date}.md`);
   let md;
@@ -692,6 +718,54 @@ async function addTask(text, date){
   catch(e){ md = DAILY_TEMPLATE(date); }
   md = appendSection(md, 'Open loops', `- [ ] ${text}`);
   return write(path, md, `Add task: ${text.slice(0,50)}`, { mode:'update' });
+}
+
+function taskRow(t){
+  const done = !!t.done;
+  return `<div class="item">
+    <div style="display:flex;gap:11px;align-items:center;flex:1;min-width:0">
+      <button class="tick ${done?'on':''}" onclick="toggleTask(${t.id}, this)"
+        aria-label="${done?'mark not done':'mark done'}">${done?'✓':''}</button>
+      <div class="m" style="min-width:0;${done?'text-decoration:line-through;color:var(--dim)':''}">${esc(t.text)}</div>
+    </div>
+  </div>`;
+}
+
+async function toggleTask(id, btn){
+  const t = ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id);
+  if(!t) return toast('Task not found');
+  btn.disabled = true;
+  try {
+    const goingDone = !t.done;
+    const r = goingDone ? await completeTask(id) : await uncompleteTask(id);
+    bump(d => { const x = (d.life.open_tasks||[]).find(y => y.id === id); if(x) x.done = goingDone; });
+    render();
+    toast(r === 'queued' ? 'Saved on device' : (goingDone ? 'Marked done' : 'Marked not done'));
+  } catch(e){
+    toast('Failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function submitAddTask(btn){
+  const text = val('lt_new');
+  if(!text) return;
+  const date = todayISO();
+  btn.disabled = true;
+  try {
+    const r = await addTask(text, date);
+    const input = document.getElementById('lt_new'); if(input) input.value = '';
+    /* reflect it immediately — the real id/line land on the next real sync */
+    bump(d => {
+      d.life.open_tasks = d.life.open_tasks || [];
+      const nextId = d.life.open_tasks.reduce((m,t) => Math.max(m, t.id), -1) + 1;
+      d.life.open_tasks.unshift({ id: nextId, text, path: `10 Daily/${date}.md`, line: -1, source: date, done: false });
+    });
+    render();
+    toast(r === 'queued' ? 'Saved on device' : 'Task added');
+  } catch(e){ toast('Failed: ' + e.message); }
+  finally { btn.disabled = false; }
 }
 
 async function saveChore(c){
@@ -704,6 +778,17 @@ async function saveChore(c){
     area:c.area || '', pet:c.pet || '', active:true, last_done:'', streak:0, tags:['chore']
   }) + `\n# ${name}\n\nAdded from the phone on ${todayISO()}.\n`;
   return write(path, body, `Add chore: ${name}`, { mode:'update' });
+}
+
+/* Patches an existing chore's frontmatter in place — schedule/category/area/
+   active only. Renaming isn't supported here (that means moving the file);
+   edit the note directly in Obsidian for that. */
+async function updateChore(c, changes){
+  const cur = await getFile(vpath(c.path));
+  if(!cur) throw new Error('Chore file missing');
+  let md = cur.text;
+  for(const [k, v] of Object.entries(changes)) md = setFm(md, k, v);
+  return write(vpath(c.path), md, `Update chore: ${c.name}`, { mode:'update' });
 }
 
 async function saveAchievement(a){
@@ -952,13 +1037,16 @@ function choreRow(c, i){
   const late = c.overdue_days > 0;
   const progress = c.times_per_period > 1 ? `${c.done_this_period || 0} of ${c.times_per_period}` : '';
   const bits = [FREQ_LABEL(c), c.area, progress].filter(Boolean).join(' · ');
+  // Everything but the tick opens the edit sheet — tapping the segment
+  // itself is how each chore's category/frequency/schedule gets changed.
   return `<div class="item">
     <div style="display:flex;gap:11px;align-items:center;flex:1;min-width:0">
       <button class="tick" onclick="tickChore(${i}, this)" aria-label="mark done">✓</button>
-      <div style="min-width:0">
+      <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+        onclick="sheetEditChore(${i})">
         <div class="m">${esc(c.name)}${c.category === 'pets' ? ' <span class="pill">pets</span>' : ''}</div>
         <div class="s">${esc(bits)}</div>
-      </div>
+      </button>
     </div>
     ${late ? `<div class="amt bad">${c.overdue_days}d late</div>`
            : c.last_done ? `<div class="s" style="white-space:nowrap">${esc(c.last_done)}</div>` : ''}
@@ -1011,15 +1099,20 @@ function viewChores(){
 
   const notDue = (ch.all || []).filter(c => !c.due);
   if(notDue.length){
-    h += `<h2>Done, and when it comes back</h2><div class="list">` + notDue.map(c =>
-      `<div class="item"><div><div class="m muted">${esc(c.name)}</div>
-       <div class="s">${esc(FREQ_LABEL(c))}${c.streak > 1 ? ` · ${c.streak} in a row` : ''}</div></div>
-       <div class="s" style="white-space:nowrap">${esc(c.next_due || '')}</div></div>`).join('') + `</div>`;
+    h += `<h2>Done, and when it comes back</h2><div class="list">` + notDue.map(c => { const i = choreRef(c);
+      return `<div class="item">
+        <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
+          onclick="sheetEditChore(${i})">
+          <div class="m muted">${esc(c.name)}</div>
+          <div class="s">${esc(FREQ_LABEL(c))}${c.streak > 1 ? ` · ${c.streak} in a row` : ''}</div>
+        </button>
+        <div class="s" style="white-space:nowrap">${esc(c.next_due || '')}</div>
+      </div>`; }).join('') + `</div>`;
   }
 
-  h += `<h2>Add or change a chore</h2><div class="card"><p class="sub" style="margin:0">
-    Chores live as notes in <code>50 Chores/Definitions</code>. Add one in Obsidian, or say
-    "add a chore to water the plants every three days" on the Update tab.</p></div>`;
+  h += `<h2>Add a chore</h2><div class="card"><p class="sub" style="margin:0 0 10px">
+    Tap any chore above to edit its category, frequency, or schedule directly.</p>
+    <button class="btn sec" onclick="sheetAddChore()">Add a chore</button></div>`;
   return h;
 }
 
@@ -1259,6 +1352,15 @@ function viewLife(){
   const active = (d.life.goals||[]).filter(g => g.status === 'active');
   h += `<h2>Goals</h2>` + (active.length ? active.map(g => goalCard(g)).join('')
        : `<div class="empty">No active goals. Add one in Obsidian and it shows up here.</div>`);
+  const tasks = d.life.open_tasks || [];
+  h += `<h2>Open tasks</h2>`;
+  h += tasks.length
+    ? `<div class="list">` + tasks.map(t => taskRow(t)).join('') + `</div>`
+    : `<div class="empty">Nothing open. Add one below.</div>`;
+  h += `<div class="row" style="gap:8px;margin-top:10px">
+    <input id="lt_new" placeholder="Add a task">
+    <button class="btn" style="width:auto;padding:13px 18px" onclick="submitAddTask(this)">Add</button>
+  </div>`;
   if(d.life.days && d.life.days.length){
     h += `<h2>Recent days</h2><div class="list">` + d.life.days.slice(0,14).map(x =>
       `<div class="item"><div><div class="m">${esc(x.date)}</div>
@@ -1589,6 +1691,75 @@ async function submitGoal(btn, i){
       if(t){ t.current = value; t.percent = t.target ? +(value/t.target*100).toFixed(1) : null; } });
     closeSheet(); render(); toast('Progress saved');
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save progress'; }
+}
+
+function sheetAddChore(){
+  openSheet(`<h1 style="font-size:22px">Add a chore</h1>
+    <label>Name</label><input id="nc_name" placeholder="e.g. Water the plants" autocapitalize="words">
+    <label>Category</label>${chipRow('nc_cat', CHORE_CATEGORIES, 'home')}
+    <label>Frequency</label>${chipRow('nc_freq', CHORE_FREQS, 'daily')}
+    <label>Every N days (only if frequency is "every_n_days")</label>
+    <input id="nc_every" type="text" inputmode="numeric" placeholder="3">
+    <label>Times per period</label><input id="nc_times" type="text" inputmode="numeric" value="1">
+    <label>Area (optional)</label><input id="nc_area" placeholder="e.g. Kitchen" autocapitalize="words">
+    <label>Pet (optional)</label><input id="nc_pet" placeholder="e.g. Cats" autocapitalize="words">
+    <button class="btn" style="margin-top:18px" onclick="submitAddChore(this)">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function submitAddChore(btn){
+  const name = val('nc_name');
+  if(!name) return toast('Give it a name');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await saveChore({ name, category: picked('nc_cat') || 'home',
+      frequency: picked('nc_freq') || 'daily', every_days: val('nc_every'),
+      times_per_period: val('nc_times') || 1, area: val('nc_area'), pet: val('nc_pet') });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : `Added ${name}`);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+function sheetEditChore(i){
+  const c = CHOREREFS[i];
+  if(!c) return toast('Chore not found');
+  openSheet(`<h1 style="font-size:22px">${esc(c.name)}</h1>
+    <p class="sub">To rename it, edit the note directly in Obsidian — everything else here is fair game.</p>
+    <label>Category</label>${chipRow('ec_cat', CHORE_CATEGORIES, c.category)}
+    <label>Frequency</label>${chipRow('ec_freq', CHORE_FREQS, c.frequency)}
+    <label>Every N days (only if frequency is "every_n_days")</label>
+    <input id="ec_every" type="text" inputmode="numeric" value="${esc(c.every_days || '')}">
+    <label>Times per period</label><input id="ec_times" type="text" inputmode="numeric" value="${c.times_per_period || 1}">
+    <label>Area (optional)</label><input id="ec_area" value="${esc(c.area || '')}" autocapitalize="words">
+    <label>Pet (optional)</label><input id="ec_pet" value="${esc(c.pet || '')}" autocapitalize="words">
+    <button class="btn" style="margin-top:18px" onclick="submitEditChore(this, ${i})">Save</button>
+    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
+    <button class="btn danger" style="margin-top:8px" onclick="submitRemoveChore(${i})">Remove chore</button>`);
+}
+
+async function submitEditChore(btn, i){
+  const c = CHOREREFS[i];
+  if(!c) return toast('Chore not found');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await updateChore(c, { category: picked('ec_cat'), frequency: picked('ec_freq'),
+      every_days: val('ec_every'), times_per_period: val('ec_times') || 1,
+      area: val('ec_area'), pet: val('ec_pet') });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device' : `${c.name} updated`);
+  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+async function submitRemoveChore(i){
+  const c = CHOREREFS[i];
+  if(!c) return toast('Chore not found');
+  try {
+    // Retired, not deleted — active:false is the template's own documented
+    // way to drop a chore from view without losing its streak history.
+    const r = await updateChore(c, { active: false });
+    closeSheet();
+    toast(r === 'queued' ? 'Saved on device' : `${c.name} removed — pull to refresh to update the list`);
+  } catch(e){ toast('Failed: ' + e.message); }
 }
 
 /* ============================ settings actions ============================ */
