@@ -56,15 +56,23 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
   border-radius:12px;padding:11px 13px;margin-bottom:8px;font-size:14px}
 nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(13,17,23,.93);
   backdrop-filter:blur(16px);border-top:1px solid var(--line);padding-bottom:var(--safe-bot);z-index:50}
-nav button{flex:1;padding:10px 0 8px;font-size:11px;color:var(--dim);display:flex;flex-direction:column;
+nav button{flex:1;padding:9px 0 7px;font-size:10px;color:var(--dim);display:flex;flex-direction:column;
   align-items:center;gap:3px}
 nav button.on{color:var(--accent)}
-nav .i{font-size:19px;line-height:1}
+nav .i{font-size:18px;line-height:1}
 .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;align-items:flex-end}
 .sheet.on{display:flex}
 .sheet>div{background:var(--bg);width:100%;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;
   padding:8px 16px calc(var(--safe-bot) + 24px);border-top:1px solid var(--line);max-width:640px;margin:0 auto}
 .handle{width:38px;height:4px;background:var(--line);border-radius:3px;margin:8px auto 14px}
+.confirm{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:150;display:none;
+  align-items:center;justify-content:center;padding:24px}
+.confirm.on{display:flex}
+.confirm .ccard{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  padding:20px;max-width:340px;width:100%}
+.confirm .ccard p{margin:0 0 14px;font-size:15px;text-align:center;color:var(--text)}
+.confirm .btn{margin-top:8px}
+.confirm .btn:first-of-type{margin-top:0}
 label{display:block;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;
   margin:14px 0 6px;font-weight:600}
 input,select,textarea{width:100%;background:var(--panel);border:1px solid var(--line);color:var(--text);
@@ -110,6 +118,7 @@ textarea{min-height:88px;resize:vertical}
 
 <nav id="nav">
   <button data-v="today" class="on"><span class="i">☀️</span>Today</button>
+  <button data-v="chores"><span class="i">🧹</span>Chores</button>
   <button data-v="talk"><span class="i">🎙️</span>Update</button>
   <button data-v="money"><span class="i">💵</span>Money</button>
   <button data-v="fitness"><span class="i">🏃</span>Fitness</button>
@@ -118,6 +127,14 @@ textarea{min-height:88px;resize:vertical}
 </nav>
 
 <div class="sheet" id="sheet"><div id="sheetBody"></div></div>
+<div class="confirm" id="closeConfirm">
+  <div class="ccard">
+    <p>Save your changes before closing?</p>
+    <button class="btn" onclick="saveAndCloseSheet()">Save</button>
+    <button class="btn sec" onclick="discardAndCloseSheet()">Discard</button>
+    <button class="btn sec" onclick="keepEditingSheet()">Keep editing</button>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -485,6 +502,8 @@ shown to the person for approval.
 {"type":"task_done","summary":"","task_id":3}
 {"type":"task_add","summary":"","text":"Call the credit union","date":"YYYY-MM-DD"}
 {"type":"achievement","summary":"","title":"First 10k run","domain":"fitness|finance|life","date":"YYYY-MM-DD","note":""}
+{"type":"chore_done","summary":"","chore":"Feed cats","times":1,"date":"YYYY-MM-DD","note":""}
+{"type":"chore_add","summary":"","name":"Water the plants","category":"home|pets","frequency":"daily|weekly|monthly|every_n_days","times_per_period":1,"every_days":null,"area":"","pet":""}
 
 Rules that matter:
 
@@ -498,6 +517,12 @@ Rules that matter:
 - Put a genuine accomplishment in "win" on the checkin. Reserve the achievement operation for
   milestones worth their own note.
 - Only reference goal_id and task_id values that appear in the context.
+- For chore_done, "chore" must match a chore name from the context exactly. If the
+  person clearly did something that is not on the list, use chore_add instead of
+  inventing a completion against a name that does not exist.
+- "Fed the cats twice" is one chore_done with times: 2, not two operations.
+- Pet care is worth confirming when it goes unmentioned for a day. Feeding, water,
+  and litter are the ones to ask about — not the vacuuming.
 - One checkin operation per day at most; merge everything reflective into it.
 - Set "done" to true when you have nothing further worth asking.
 - Questions must be answerable in a sentence. Never ask more than three at once.`;
@@ -510,6 +535,8 @@ function buildContext(){
                       current:g.current, target:g.target, unit:g.unit }));
   window.__goalIndex = (life.goals || []).filter(g => g.status === 'active');
   const tasks = (life.open_tasks || []).slice(0, 25).map(t => ({ id:t.id, text:t.text }));
+  const chores = ((d.chores && d.chores.due) || []).slice(0, 20);
+  const allChores = ((d.chores && d.chores.all) || []).map(c => c.name);
   const depth = cfg().depth || 'gaps';
   const depthLine = {
     minimal: 'Ask only when the update is genuinely ambiguous. Do not raise anything the person did not mention.',
@@ -530,6 +557,12 @@ ${goals.length ? goals.map(g => `  [${g.id}] ${g.name} (${g.domain}) — ${g.met
 
 Open tasks:
 ${tasks.length ? tasks.map(t => `  [${t.id}] ${t.text}`).join('\n') : '  none'}
+
+Chores due (use these names exactly):
+${chores.length ? chores.map(c => `  ${c.name} (${c.category}, ${c.frequency}` +
+    (c.times_per_period > 1 ? `, ${c.done_this_period || 0} of ${c.times_per_period} done today` : '') +
+    (c.overdue_days > 0 ? `, ${c.overdue_days} days overdue` : '') + ')').join('\n') : '  none outstanding'}
+All chore names: ${allChores.join(', ') || 'none defined'}
 
 Recent context: spent ${money.spent_month || 0} this month, ${fit.sessions_7d || 0} workouts in the
 last 7 days, latest weight ${fit.latest_weight || 'unknown'}.
@@ -627,6 +660,13 @@ async function runOp(op){
     case 'task_done':  return completeTask(op.task_id);
     case 'task_add':   return addTask(op.text, date);
     case 'achievement':return saveAchievement({ title:op.title, domain:op.domain || 'life', date, note:op.note || '' });
+    case 'chore_done': {
+      const times = Math.max(1, Math.min(6, Number(op.times) || 1));
+      let last;
+      for(let i = 0; i < times; i++) last = await logChore(op.chore, op.note || '');
+      return last;
+    }
+    case 'chore_add':  return saveChore(op);
     default: throw new Error('Unknown operation: ' + op.type);
   }
 }
@@ -654,6 +694,18 @@ async function addTask(text, date){
   return write(path, md, `Add task: ${text.slice(0,50)}`, { mode:'update' });
 }
 
+async function saveChore(c){
+  const name = safeName(c.name);
+  if(!name) throw new Error('Chore needs a name');
+  const path = vpath(`50 Chores/Definitions/${name}.md`);
+  const body = fm({
+    type:'chore', category:c.category || 'home', frequency:c.frequency || 'daily',
+    times_per_period:c.times_per_period || 1, every_days:c.every_days || '',
+    area:c.area || '', pet:c.pet || '', active:true, last_done:'', streak:0, tags:['chore']
+  }) + `\n# ${name}\n\nAdded from the phone on ${todayISO()}.\n`;
+  return write(path, body, `Add chore: ${name}`, { mode:'update' });
+}
+
 async function saveAchievement(a){
   const path = vpath(`40 Life/Achievements/${a.date} ${safeName(a.title)}.md`);
   const body = fm({ type:'achievement', date:a.date, domain:a.domain, tags:['achievement'] })
@@ -675,11 +727,14 @@ function opLabel(op){
     case 'task_done': return `Complete a task`;
     case 'task_add': return `New task: ${op.text}`;
     case 'achievement': return `Achievement: ${op.title}`;
+    case 'chore_done': return `${op.chore}${op.times > 1 ? ` ×${op.times}` : ''} done`;
+    case 'chore_add': return `New chore: ${op.name}`;
     default: return op.type;
   }
 }
 const OP_ICON = { expense:'💵', income:'💰', workout:'🏃', metric:'⚖️', checkin:'📝',
-                  goal_progress:'🎯', task_done:'✅', task_add:'📌', achievement:'🏆' };
+                  goal_progress:'🎯', task_done:'✅', task_add:'📌', achievement:'🏆',
+                  chore_done:'🧹', chore_add:'🧺' };
 
 function viewTalk(){
   const c = cfg();
@@ -696,8 +751,8 @@ function viewTalk(){
   if(!CHAT.length){
     h += `<div class="card"><p class="sub" style="margin:0">Tap the text box, hit the mic key on your
       keyboard, and talk. Something like: <i>"Ran four miles this morning, felt good. Spent about
-      sixty at the grocery store on the Amex. Put four hundred into the emergency fund. Slept seven
-      hours, rating the day an eight."</i></p></div>`;
+      sixty at the grocery store on the Amex. Fed the cats twice and scooped the litter. Put four
+      hundred into the emergency fund. Slept seven hours, rating the day an eight."</i></p></div>`;
   }
   CHAT.forEach(m => {
     if(m.role === 'user'){
@@ -749,6 +804,7 @@ function opDetail(op){
   if(op.intensity) bits.push(op.intensity);
   if(op.journal) bits.push('journal entry');
   if(op.win) bits.push('win recorded');
+  if(op.frequency) bits.push(op.frequency);
   if(op.note) bits.push(op.note.slice(0, 40));
   return bits.join(' · ');
 }
@@ -835,6 +891,138 @@ async function uploadPaystub(file){
   }
 }
 
+/* ============================ chores ============================ */
+
+/* Logging a chore appends one row to the month's log. A GitHub Action then works
+   out due dates and streaks from that log. Keeping the phone's job to a single
+   append is what makes ticking something off feel instant. */
+
+const CHORE_LOG_HEADER = '| Date | Time | Chore | Note |\n|---|---|---|---|\n';
+
+function choreLogPath(d){ return vpath(`50 Chores/Log/${d.slice(0,7)}.md`); }
+
+function newChoreLog(month){
+  return `---\ntype: chore_log\nmonth: ${month}\ntags: [chore]\n---\n\n` +
+         `# Chore log — ${month}\n\nAppend-only. The phone writes here; do not edit by hand.\n\n` +
+         CHORE_LOG_HEADER;
+}
+
+async function logChore(name, note){
+  const date = todayISO();
+  const time = new Date().toTimeString().slice(0,5);
+  const path = choreLogPath(date);
+  let md;
+  try {
+    const cur = await getFile(path);
+    md = cur ? cur.text : newChoreLog(date.slice(0,7));
+  } catch(e){ md = newChoreLog(date.slice(0,7)); }
+  if(!md.includes(CHORE_LOG_HEADER)) md = md.trimEnd() + '\n\n' + CHORE_LOG_HEADER;
+  md = md.trimEnd() + `\n| ${date} | ${time} | ${name} | ${(note||'').replace(/\|/g,'/')} |\n`;
+  const r = await write(path, md, `Chore: ${name}`, { mode:'update' });
+  bumpChore(name);
+  return r;
+}
+
+/* reflect the tick immediately — CI updates the real numbers within the minute */
+function bumpChore(name){
+  bump(d => {
+    if(!d.chores) return;
+    const c = (d.chores.all || []).find(x => x.name === name);
+    if(!c) return;
+    c.done_this_period = (c.done_this_period || 0) + 1;
+    c.remaining = Math.max(0, (c.times_per_period || 1) - c.done_this_period);
+    c.last_done = todayISO();
+    if(c.remaining === 0){
+      c.due = false; c.overdue_days = 0;
+      d.chores.due = (d.chores.due || []).filter(x => x.name !== name);
+      d.chores.overdue = (d.chores.overdue || []).filter(x => x.name !== name);
+      d.chores.pets_due = (d.chores.pets_due || []).filter(x => x.name !== name);
+    }
+    d.chores.due_count = (d.chores.due || []).length;
+    d.chores.overdue_count = (d.chores.overdue || []).length;
+    d.chores.pets_clear = (d.chores.pets_due || []).length === 0;
+  });
+}
+
+const FREQ_LABEL = c => c.frequency === 'every_n_days'
+  ? `every ${c.every_days} days`
+  : c.frequency + (c.times_per_period > 1 ? ` ×${c.times_per_period}` : '');
+
+function choreRow(c, i){
+  const late = c.overdue_days > 0;
+  const progress = c.times_per_period > 1 ? `${c.done_this_period || 0} of ${c.times_per_period}` : '';
+  const bits = [FREQ_LABEL(c), c.area, progress].filter(Boolean).join(' · ');
+  return `<div class="item">
+    <div style="display:flex;gap:11px;align-items:center;flex:1;min-width:0">
+      <button class="tick" onclick="tickChore(${i}, this)" aria-label="mark done">✓</button>
+      <div style="min-width:0">
+        <div class="m">${esc(c.name)}${c.category === 'pets' ? ' <span class="pill">pets</span>' : ''}</div>
+        <div class="s">${esc(bits)}</div>
+      </div>
+    </div>
+    ${late ? `<div class="amt bad">${c.overdue_days}d late</div>`
+           : c.last_done ? `<div class="s" style="white-space:nowrap">${esc(c.last_done)}</div>` : ''}
+  </div>`;
+}
+
+let CHOREREFS = [];
+function choreRef(c){ CHOREREFS.push(c); return CHOREREFS.length - 1; }
+
+async function tickChore(i, btn){
+  const c = CHOREREFS[i];
+  if(!c) return toast('Chore not found');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await logChore(c.name, '');
+    render();
+    toast(r === 'queued' ? `${c.name} saved on device` : `${c.name} done`);
+  } catch(e){
+    btn.disabled = false; btn.textContent = '✓';
+    toast('Failed: ' + e.message);
+  }
+}
+
+function viewChores(){
+  const d = DATA;
+  let h = header('Chores', d && d.chores ? `${d.chores.due_count} due` : '');
+  if(!configured()) return h + needsSetup();
+  if(!d || !d.chores) return h + `<div class="empty">No chore data yet. Pull to refresh.</div>`;
+  const ch = d.chores;
+
+  if(ch.pets && ch.pets.length){
+    h += `<h2>Pets</h2>`;
+    if(ch.pets_clear){
+      h += `<div class="card"><div class="row"><b class="good">All set</b>
+        <span class="sub">fed, watered, litter done</span></div></div>`;
+    } else {
+      h += `<div class="list">` + ch.pets_due.map(c => choreRow(c, choreRef(c))).join('') + `</div>`;
+    }
+    const petsDone = ch.pets.filter(c => !c.due);
+    if(petsDone.length && !ch.pets_clear){
+      h += `<p class="sub" style="margin-top:8px">Done: ${petsDone.map(c => esc(c.name)).join(', ')}</p>`;
+    }
+  }
+
+  const rest = (ch.due || []).filter(c => c.category !== 'pets');
+  h += `<h2>Due${rest.length ? '' : ' — nothing else'}</h2>`;
+  h += rest.length
+    ? `<div class="list">` + rest.map(c => choreRow(c, choreRef(c))).join('') + `</div>`
+    : `<div class="card"><span class="sub">Everything else is done. Go and enjoy that.</span></div>`;
+
+  const notDue = (ch.all || []).filter(c => !c.due);
+  if(notDue.length){
+    h += `<h2>Done, and when it comes back</h2><div class="list">` + notDue.map(c =>
+      `<div class="item"><div><div class="m muted">${esc(c.name)}</div>
+       <div class="s">${esc(FREQ_LABEL(c))}${c.streak > 1 ? ` · ${c.streak} in a row` : ''}</div></div>
+       <div class="s" style="white-space:nowrap">${esc(c.next_due || '')}</div></div>`).join('') + `</div>`;
+  }
+
+  h += `<h2>Add or change a chore</h2><div class="card"><p class="sub" style="margin:0">
+    Chores live as notes in <code>50 Chores/Definitions</code>. Add one in Obsidian, or say
+    "add a chore to water the plants every three days" on the Update tab.</p></div>`;
+  return h;
+}
+
 /* ============================ views ============================ */
 
 let view = 'today';
@@ -858,12 +1046,37 @@ function needsSetup(){
     <button class="btn" onclick="go('settings')">Open settings</button></div>`;
 }
 
+function choresStrip(){
+  const ch = DATA && DATA.chores;
+  if(!ch || !(ch.all || []).length) return '';
+  const pets = ch.pets_due || [];
+  let h = '';
+  if(pets.length){
+    const late = pets.filter(c => c.overdue_days > 0);
+    h += `<div class="card" style="border-color:${late.length ? 'var(--bad)' : 'var(--line)'}">
+      <div class="row"><b>${late.length ? 'Pets are waiting' : 'Pets still need you'}</b>
+      <span class="sub">${pets.length} left</span></div>
+      <div class="list" style="margin-top:10px">` +
+      pets.map(c => choreRow(c, choreRef(c))).join('') + `</div></div>`;
+  } else if((ch.pets || []).length){
+    h += `<div class="card"><div class="row"><b class="good">Pets are sorted</b>
+      <span class="sub">fed, watered, litter done</span></div></div>`;
+  }
+  const rest = (ch.due || []).filter(c => c.category !== 'pets');
+  if(rest.length){
+    h += `<button class="btn sec" style="margin:2px 0 10px" onclick="go('chores')">
+      ${rest.length} other chore${rest.length > 1 ? 's' : ''} due</button>`;
+  }
+  return h;
+}
+
 function viewToday(){
   const d = DATA;
   const day = new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
   let h = header('Today', day);
   if(!configured()) return h + needsSetup();
   h += nudges();
+  h += choresStrip();
   h += `<button class="btn" style="margin:6px 0 12px" onclick="go('talk')">🎙️ Dictate today's update</button>`;
   h += `<div class="quick">
     <button onclick="sheetExpense()"><span class="e">💵</span><span class="t">Log expense</span><span class="d">Tap, type, done</span></button>
@@ -876,7 +1089,7 @@ function viewToday(){
     <div class="stat"><div class="l">Spent today</div><div class="n">${money0(d.money.spent_today)}</div></div>
     <div class="stat"><div class="l">This month</div><div class="n">${money0(d.money.spent_month)}</div></div>
     <div class="stat"><div class="l">Workouts, 7d</div><div class="n">${d.fitness.sessions_7d}</div></div>
-    <div class="stat"><div class="l">Net worth</div><div class="n">${money0(d.money.net_worth)}</div></div>
+    <div class="stat"><div class="l">Chores due</div><div class="n ${d.chores && d.chores.overdue_count ? 'warn' : ''}">${d.chores ? d.chores.due_count : '—'}</div></div>
   </div>`;
   const recent = (d.money.recent||[]).slice(0,5);
   if(recent.length){
@@ -1128,10 +1341,11 @@ function viewSettings(){
   </div>`;
 }
 
-const VIEWS = { today:viewToday, talk:viewTalk, money:viewMoney, fitness:viewFitness, life:viewLife, settings:viewSettings };
+const VIEWS = { today:viewToday, chores:viewChores, talk:viewTalk, money:viewMoney, fitness:viewFitness, life:viewLife, settings:viewSettings };
 
 function render(){
   GOALREFS = [];
+  CHOREREFS = [];
   $('#app').innerHTML = (VIEWS[view] || viewToday)();
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
   window.scrollTo(0,0);
@@ -1144,7 +1358,97 @@ function go(v){ view = v; render(); }
 
 function openSheet(html){ $('#sheetBody').innerHTML = `<div class="handle"></div>` + html; $('#sheet').classList.add('on'); }
 function closeSheet(){ $('#sheet').classList.remove('on'); }
-$('#sheet').addEventListener('click', e => { if(e.target.id === 'sheet') closeSheet(); });
+// Tapping the backdrop goes through the same "did you mean to lose this?"
+// gate as the swipe gesture below, instead of silently discarding.
+$('#sheet').addEventListener('click', e => { if(e.target.id === 'sheet') attemptCloseSheet(); });
+
+/* ============================ swipe-down-to-close sheets ============================ */
+// A subwindow (the bottom sheet — e.g. what "Log expense" opens) can be
+// dragged closed from its handle/header, same gesture as the pull-to-refresh
+// above. Releasing past the trigger doesn't close it outright: if anything
+// meaningful was typed, it asks to Save or Discard first so a swipe never
+// silently loses an entry — same "bad signal must not lose an entry"
+// principle as everything else that writes to the vault.
+const SHEET_CLOSE_TRIGGER = 90, SHEET_CLOSE_MAX = 220, SHEET_CLOSE_DAMP = 0.6;
+let sheetDragStartY = 0, sheetPulling = false, sheetDragging = false;
+
+const sheetPanel = () => $('#sheetBody');
+
+function setSheetDrag(px){
+  const p = sheetPanel(); if(!p) return;
+  p.style.transform = px ? `translateY(${px}px)` : '';
+}
+function settleSheetDrag(px){
+  const p = sheetPanel(); if(!p) return;
+  p.style.transition = 'transform .2s ease';
+  setSheetDrag(px);
+  setTimeout(() => { p.style.transition = ''; }, 220);
+}
+
+document.addEventListener('touchstart', e => {
+  if(!$('#sheet').classList.contains('on') || $('#closeConfirm').classList.contains('on')) return;
+  const p = sheetPanel();
+  if(!p || p.scrollTop > 0 || e.touches.length !== 1) return;
+  const touchY = e.touches[0].clientY;
+  // Only the handle/header ~80px starts a drag, so scrolling further down a
+  // long form (metrics, check-in) still works normally.
+  if(touchY - p.getBoundingClientRect().top > 80) return;
+  sheetDragStartY = touchY; sheetPulling = true; sheetDragging = false;
+}, {passive:true});
+
+document.addEventListener('touchmove', e => {
+  if(!sheetPulling) return;
+  const p = sheetPanel();
+  if(!p || p.scrollTop > 0){ sheetPulling = false; if(sheetDragging){ sheetDragging = false; settleSheetDrag(0); } return; }
+  const dy = Math.max(0, e.touches[0].clientY - sheetDragStartY);
+  if(dy === 0) return;
+  sheetDragging = true;
+  setSheetDrag(Math.min(SHEET_CLOSE_MAX, dy * SHEET_CLOSE_DAMP));
+}, {passive:true});
+
+document.addEventListener('touchend', () => {
+  if(!sheetPulling) return;
+  sheetPulling = false;
+  if(!sheetDragging) return;
+  sheetDragging = false;
+  const p = sheetPanel();
+  const m = p ? p.style.transform.match(/-?\d+\.?\d*/) : null;
+  const dist = m ? parseFloat(m[0]) : 0;
+  if(dist >= SHEET_CLOSE_TRIGGER) attemptCloseSheet();
+  else settleSheetDrag(0);
+});
+document.addEventListener('touchcancel', () => { sheetPulling = false; sheetDragging = false; settleSheetDrag(0); });
+
+function sheetHasInput(){
+  const body = $('#sheetBody');
+  if(!body) return false;
+  for(const f of body.querySelectorAll('input, textarea')){
+    if(f.type === 'date' || f.tagName === 'SELECT') continue; // always have a default value; not meaningful alone
+    if((f.value || '').trim()) return true;
+  }
+  return false;
+}
+
+function attemptCloseSheet(){
+  if(!sheetHasInput()){ settleSheetDrag(0); closeSheet(); return; }
+  $('#closeConfirm').classList.add('on');
+}
+function keepEditingSheet(){
+  $('#closeConfirm').classList.remove('on');
+  settleSheetDrag(0);
+}
+function saveAndCloseSheet(){
+  $('#closeConfirm').classList.remove('on');
+  // Every sheet's own Save button already validates and writes correctly —
+  // reuse it instead of duplicating per-sheet save logic here.
+  const saveBtn = document.querySelector('#sheetBody .btn:not(.sec):not(.danger)');
+  if(saveBtn) saveBtn.click(); else closeSheet();
+}
+function discardAndCloseSheet(){
+  $('#closeConfirm').classList.remove('on');
+  settleSheetDrag(0);
+  closeSheet();
+}
 
 function chipRow(id, opts, sel){
   return `<div class="chips" id="${id}">` + opts.map(o =>
