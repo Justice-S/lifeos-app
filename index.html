@@ -113,6 +113,7 @@ textarea{min-height:88px;resize:vertical}
 .chip{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:8px 13px;font-size:14px}
 .chip.on{background:var(--accent);color:var(--ink);border-color:var(--accent);font-weight:600}
 .pill{font-size:11px;padding:3px 8px;border-radius:20px;background:var(--panel2);color:var(--dim)}
+.pill.bad{background:var(--bad);color:#fff}
 .status{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:6px}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--dim)}
 .dot.ok{background:var(--good)} .dot.off{background:var(--warn)} .dot.err{background:var(--bad)}
@@ -227,7 +228,7 @@ const CHORE_CATEGORIES = ['home','pets','admin'];
 const CHORE_CATEGORY_LABELS = { home:'Home', pets:'Pets', admin:'Admin' };
 // One note type, type: chore, covers both a traditional recurring chore
 // (due_recur set) and what the app calls a "task" (due_recur blank, "One
-// time" below) -- see CLAUDE.md #25/#37. CHORE_FREQS/CHORE_FREQ_LABELS are
+// time" below) -- see CLAUDE.md #25. CHORE_FREQS/CHORE_FREQ_LABELS are
 // the recurring-only vocabulary (Chores tab filters, FREQ_LABEL); the
 // Add/Edit sheet's Repeats picker uses DUE_RECURS/DUE_RECUR_LABELS below,
 // which is CHORE_FREQS plus the one-time option.
@@ -1105,6 +1106,40 @@ async function uncompleteTask(id){
   return setTaskNoteDone(t, false);
 }
 
+/* Client-side mirror of build_summary.py's due_occurrence(), today-only --
+   lets a just-added/edited task show the right due_today/next_date
+   immediately, without waiting on a real summary rebuild (see
+   bumpChoreDraft()). Never computes overdue-days or streaks; those stay
+   genuinely unknown here (a recurring chore's, from the log; a task just
+   reads next_date < today, see taskRow()) until the real thing runs. */
+function localDueOccurrence(rec, todayIso){
+  const t = todayIso || todayISO();
+  if(rec.due_recur === 'daily') return { due_today:true, next_date:t };
+  if(rec.due_recur === 'weekly'){
+    const wd = (rec.due_weekday === '' || rec.due_weekday == null) ? null : Number(rec.due_weekday);
+    if(wd == null || wd < 0 || wd > 6) return { due_today:false, next_date:'' };
+    const d = new Date(t + 'T00:00:00');
+    const delta = (wd - d.getDay() + 7) % 7;
+    d.setDate(d.getDate() + delta);
+    const iso = d.toISOString().slice(0,10);
+    return { due_today: iso === t, next_date: iso };
+  }
+  if(rec.due_recur === 'monthly'){
+    const day = (rec.due_day === '' || rec.due_day == null) ? null : Number(rec.due_day);
+    if(!day || day < 1 || day > 31) return { due_today:false, next_date:'' };
+    const [y, m] = t.split('-').map(Number);
+    const clamp = (yr, mo) => Math.min(day, new Date(yr, mo, 0).getDate());
+    let iso = `${y}-${String(m).padStart(2,'0')}-${String(clamp(y,m)).padStart(2,'0')}`;
+    if(iso < t){
+      const ny = m < 12 ? y : y+1, nm = m < 12 ? m+1 : 1;
+      iso = `${ny}-${String(nm).padStart(2,'0')}-${String(clamp(ny,nm)).padStart(2,'0')}`;
+    }
+    return { due_today: iso === t, next_date: iso };
+  }
+  if(rec.due_date) return { due_today: rec.due_date === t, next_date: rec.due_date };
+  return { due_today:false, next_date:'' };
+}
+
 /* A task's due line: "Monthly, day 15" or "2026-08-12", plus a time if
    one's set. Blank for a task with no due_date at all -- an open item
    with nothing to be "due." */
@@ -1118,14 +1153,21 @@ function taskDueLine(t){
 
 function taskRow(t, opts={}){
   const done = !!t.done, sub = taskDueLine(t);
+  // A task has no overdue_days the way a recurring chore does (see
+  // CLAUDE.md #25) -- once its next_date is in the past and it's still
+  // open, that's the only signal there is, so it's worth calling out the
+  // same way an overdue chore gets a red badge instead of quietly fading
+  // out of the "today" pill.
+  const overdue = !done && t.next_date && t.next_date < todayISO();
   const body = `<div class="m" style="min-width:0;${done?'text-decoration:line-through;color:var(--dim)':''}">${esc(t.text)}</div>${
-    sub ? `<div class="s">${esc(sub)}</div>` : ''}`;
+    sub ? `<div class="s ${overdue?'bad':''}">${esc(sub)}</div>` : ''}`;
   return `<div class="item">
     <div style="display:flex;gap:11px;align-items:center;flex:1;min-width:0">
       <button class="tick ${done?'on':''}" onclick="toggleTask(${t.id}, this)"
         aria-label="${done?'mark not done':'mark done'}">${done?'✓':''}</button>
       <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0" onclick="sheetEditDueChore(${t.id})">${body}</button>
       ${t.due_today && !opts.hidePill ? '<span class="pill">today</span>' : ''}
+      ${overdue && !opts.hidePill ? '<span class="pill bad">late</span>' : ''}
     </div>
   </div>`;
 }
@@ -1162,15 +1204,79 @@ async function toggleTask(id, btn){
   }
 }
 
+/* Reflects an add/edit/conversion locally so the Chores tab shows the
+   right thing immediately -- otherwise nothing on screen changes until a
+   real summary rebuild lands, which needs a GitHub Action to actually run
+   and can take minutes, unlike every other sheet in this file (compare
+   submitExpense/submitEditGoal/etc, which all bump()). due/overdue_days/
+   streak/last_done for a RECURRING chore stay whatever they already were
+   (blank for a new one) since only update_chores.py's log can really
+   compute those; a task's due_today/next_date are recomputed with
+   localDueOccurrence() so its "today"/"late" pill is right immediately.
+   d is a draft-shaped object (CHORE_DRAFT, or the minimal one
+   submitAddTask builds) -- d.path set means this is an edit, and since
+   editing can convert a chore between recurring and one-time, the existing
+   record is pulled from whichever of the three arrays it's actually in. */
+function bumpChoreDraft(d, text, category){
+  bump(dd => {
+    dd.chores.all = dd.chores.all || [];
+    dd.chores.tasks = dd.chores.tasks || [];
+    dd.chores.tasks_done = dd.chores.tasks_done || [];
+    let existing = null;
+    if(d.path){
+      const pull = arr => { const i = arr.findIndex(x => x.path === d.path); return i < 0 ? null : arr.splice(i,1)[0]; };
+      existing = pull(dd.chores.all) || pull(dd.chores.tasks) || pull(dd.chores.tasks_done);
+    }
+    const path = d.path || `50 Chores/Definitions/${safeName(text)}.md`;
+    const base = {
+      name: text, text, category,
+      due_recur: d.due_recur,
+      due_day: d.due_recur === 'monthly' ? (parseInt(d.due_day, 10) || null) : null,
+      due_weekday: d.due_recur === 'weekly' ? Number(d.due_weekday) : null,
+      due_every_days: d.due_recur === 'every_n_days' ? (parseInt(d.due_every_days, 10) || 0) : 0,
+      times_per_period: d.due_recur ? (parseInt(d.times_per_period, 10) || 1) : 1,
+      area: d.area || '', pet: d.pet || '',
+      due_time: d.due_time || '', notifications: (d.notifications||[]).map(formatNotificationToken),
+      path,
+    };
+    if(d.due_recur){
+      const wasRecurring = existing && existing.due_recur;
+      const rec = { ...base,
+        last_done: wasRecurring ? existing.last_done || '' : '',
+        streak: wasRecurring ? existing.streak || 0 : 0,
+        done_this_period: wasRecurring ? existing.done_this_period || 0 : 0,
+        due: wasRecurring ? !!existing.due : false,
+        overdue_days: wasRecurring ? existing.overdue_days || 0 : 0,
+        next_due: wasRecurring ? existing.next_due || '' : '',
+      };
+      rec.remaining = Math.max(0, rec.times_per_period - rec.done_this_period);
+      dd.chores.all.unshift(rec);
+    } else {
+      const occ = localDueOccurrence({due_recur:'', due_date: d.due_date}, todayISO());
+      const done = existing ? !!existing.done : false;
+      const nextId = existing ? existing.id
+        : 1 + Math.max(-1, ...dd.chores.tasks.map(t => t.id), ...dd.chores.tasks_done.map(t => t.id));
+      const rec = { ...base, due_date: d.due_date || '', due_today: occ.due_today, next_date: occ.next_date,
+        done, done_date: existing ? existing.done_date || '' : '', id: nextId };
+      (done ? dd.chores.tasks_done : dd.chores.tasks).unshift(rec);
+    }
+  });
+}
+
 // Quick capture -- still one tap, but it's a full chore note underneath
 // (due_recur blank, everything else default) rather than a checklist
 // line; there's no lighter-weight object to fall back to (CLAUDE.md #25).
+// Defaults to Admin rather than Home -- most one-line quick tasks ("call
+// the dentist", "renew the passport") aren't household chores.
 async function submitAddTask(btn){
   const text = val('ch_new_task');
   if(!text) return;
   btn.disabled = true;
+  const draft = { path:'', due_recur:'', due_date:'', due_day:'', due_weekday:'',
+    due_every_days:'', times_per_period:'1', area:'', pet:'', due_time:'', notifications:[] };
   try {
-    const r = await saveChore({ name: text, due_recur: '' });
+    const r = await saveChore({ name: text, category:'admin', due_recur: '' });
+    bumpChoreDraft(draft, text, 'admin');
     const input = document.getElementById('ch_new_task'); if(input) input.value = '';
     render();
     toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Task added');
@@ -1183,14 +1289,14 @@ async function submitAddTask(btn){
    type: chore. c.due_recur set makes it recurring (the traditional "chore"
    sense, processed by update_chores.py from the completion log); blank
    makes it one-time (what the app calls a "task" -- same object, see
-   CLAUDE.md #25/#37). text carries the display title independently of the
+   CLAUDE.md #25). text carries the display title independently of the
    filename -- only meaningful for a one-time item (build_summary.py falls
    back to the filename otherwise); a recurring chore's displayed name is
    always its filename (n["_name"]), so text is written but never read
    back there. Editing an existing note goes through updateChore() instead
    (this only ever creates), which is also how a chore is converted between
    recurring and one-time -- "the object is a chore, meaning it can be
-   updated to recur" (see CLAUDE.md #37). */
+   updated to recur" (see CLAUDE.md #25). */
 async function saveChore(c){
   const filename = safeName(c.name);
   if(!filename) throw new Error('Needs a name');
@@ -1215,9 +1321,11 @@ async function saveChore(c){
   return write(path, body, `Add chore: ${filename}`, { mode:'update' });
 }
 
-/* Patches an existing chore's frontmatter in place — schedule/category/area/
-   active only. Renaming isn't supported here (that means moving the file);
-   edit the note directly in Obsidian for that. */
+/* Patches an existing chore's frontmatter in place — category, Repeats and
+   whatever due-date field/times_per_period it needs, area, pet, due_time,
+   notifications, active, and (one-time items only) text — see
+   choreChanges(). Renaming a recurring chore isn't supported here (that
+   means moving the file); edit the note directly in Obsidian for that. */
 async function updateChore(c, changes){
   const cur = await getFile(vpath(c.path));
   if(!cur) throw new Error('Chore file missing');
@@ -1632,7 +1740,9 @@ function renderChoreFilters(ch){
 
 function viewChores(){
   const d = DATA;
-  let h = header('Chores', d && d.chores ? `${d.chores.due_count} due` : '');
+  let h = header('Chores', d && d.chores
+    ? `${d.chores.due_count} due` + ((d.chores.tasks||[]).length ? ` · ${d.chores.tasks.length} task${d.chores.tasks.length>1?'s':''}` : '')
+    : '');
   if(!configured()) return h + needsSetup();
   if(!d || !d.chores) return h + `<div class="empty">No chore data yet. Pull to refresh.</div>`;
   const ch = d.chores;
@@ -1967,7 +2077,10 @@ function daySummary(c, enabled){
   return bits.length ? bits.join(' · ') : 'Not set';
 }
 
-function toggleDayEnabled(btn){
+// Generic On/Off tick toggle -- not schedule-specific despite where it was
+// first written; reused for any simple on/off switch (a day's work-hours
+// toggle, a transaction's Exempt flag, guest mode, ...).
+function toggleOnOffBtn(btn){
   btn.classList.toggle('on');
   btn.textContent = btn.classList.contains('on') ? 'On' : 'Off';
 }
@@ -1993,7 +2106,7 @@ function renderScheduleSection(){
       <div class="row">
         <b>Work hours apply</b>
         <button class="tick ${enabled?'on':''}" style="width:44px;height:28px;border-radius:14px"
-          onclick="toggleDayEnabled(this)" id="sch_${dow}_enabled">${enabled?'On':'Off'}</button>
+          onclick="toggleOnOffBtn(this)" id="sch_${dow}_enabled">${enabled?'On':'Off'}</button>
       </div>
       <label>Wake up</label><input id="sch_${dow}_wake" type="time" value="${esc(c.wake||'')}">
       <label>Sleep</label><input id="sch_${dow}_sleep" type="time" value="${esc(c.sleep||'')}">
@@ -2362,7 +2475,7 @@ function sheetEditTransaction(i){
         <p class="sub" style="margin-top:2px">Keeps it out of spent-today/month and category totals.
         Greys it out and masks the amount here, same as guest mode.</p></div>
       <button class="tick ${t.exempt?'on':''}" style="width:44px;height:28px;border-radius:14px;flex-shrink:0"
-        onclick="toggleDayEnabled(this)" id="et_exempt">${t.exempt?'On':'Off'}</button>
+        onclick="toggleOnOffBtn(this)" id="et_exempt">${t.exempt?'On':'Off'}</button>
     </div>
     <button class="btn" style="margin-top:18px" onclick="submitEditTransaction(this, ${i})">Save</button>
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
@@ -2491,7 +2604,7 @@ function goalCard(g){
   const pct = g.percent == null ? null : Math.max(0, Math.min(100, g.percent));
   // due_recur replaces the old, never-read review_cadence field -- when
   // set it drives both the streak on the Calendar tab and, if a time's
-  // set, a real check-in push (see CLAUDE.md #37, build_summary.py's
+  // set, a real check-in push (see CLAUDE.md #29, build_summary.py's
   // goal_streak()).
   const checkin = g.due_recur ? `Check in ${g.due_recur}${g.due_today ? ' · due today' : ''}` : '';
   return `<div class="card">
@@ -3266,15 +3379,15 @@ async function submitDeleteAchievement(i){
 }
 
 /* ---- chores (recurring and one-time -- "the object is a chore, meaning
-   it can be updated to recur", CLAUDE.md #37) ---- */
+   it can be updated to recur", CLAUDE.md #25) ---- */
 
 // Draft state for the one Add/Edit Chore sheet, shared by every entry
-// point (Chores tab's "Add a chore"/tap-a-chore, Life tab's "Add a due
-// date"/tap-a-due-item) -- kept outside the DOM (like PENDING/CHAT
-// elsewhere in this file) because renderChoreSheet() rebuilds the whole
-// sheet from scratch on every structural change (Repeats toggle, notif
-// row add/remove/kind-change), the same way toggleOp() re-renders the
-// whole page rather than patching one node.
+// point on the Chores tab ("Add a chore", "Add a task", tap-a-chore,
+// tap-a-task) -- kept outside the DOM (like PENDING/CHAT elsewhere in this
+// file) because renderChoreSheet() rebuilds the whole sheet from scratch
+// on every structural change (Repeats toggle, notif row add/remove/kind-
+// change), the same way toggleOp() re-renders the whole page rather than
+// patching one node.
 let CHORE_DRAFT = null;
 
 function blankChoreDraft(recur){
@@ -3371,10 +3484,12 @@ function renderChoreSheet(){
       <input id="ch_times" type="text" inputmode="numeric" value="${esc(d.times_per_period)}"
         oninput="CHORE_DRAFT.times_per_period=this.value">
     `}
+    ${d.due_recur || d.area || d.pet ? `
     <label>Area (optional)</label><input id="ch_area" value="${esc(d.area)}" placeholder="e.g. Kitchen"
       autocapitalize="words" oninput="CHORE_DRAFT.area=this.value">
     <label>Pet (optional)</label><input id="ch_pet" value="${esc(d.pet)}" placeholder="e.g. Cats"
       autocapitalize="words" oninput="CHORE_DRAFT.pet=this.value">
+    ` : ''}
     <label>Time (optional)</label>${timeSelect('ch_time', d.due_time, 'setChoreDueTime')}
     <p class="sub" style="margin-top:4px">Locked to the hour or half hour — pushes only ever run on that
     grid. "Before due" notifications need this set, "At a time of day" notifications don't.</p>
@@ -3389,9 +3504,9 @@ function renderChoreSheet(){
 // Only a one-time item's title is editable here (see choreToDraft/the
 // disabled input above) -- a recurring chore's displayed name is always
 // its filename, so text is never patched back for one.
-function choreChanges(d){
+function choreChanges(d, category){
   const changes = {
-    category: picked('ch_cat') || 'home',
+    category,
     due_recur: d.due_recur,
     due_date: d.due_recur === '' ? (d.due_date || todayISO()) : '',
     due_day: d.due_recur === 'monthly' ? d.due_day : '',
@@ -3420,11 +3535,19 @@ async function submitChore(btn){
     const every = parseInt(d.due_every_days, 10);
     if(!every || every < 1) return toast('Give a number of days');
   }
+  // Read once, used for both the write and the local bump below -- the
+  // category chip only lives in the DOM (see chipRow/picked), it was never
+  // written back into CHORE_DRAFT the way a plain input's oninput does.
+  // saveChore() used to read d.category directly here, which meant a new
+  // chore/task always saved under whatever the draft started as (Home)
+  // no matter which chip was actually tapped.
+  const category = picked('ch_cat') || 'home';
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
     const r = d.path
-      ? await updateChore({path:d.path, name:text}, choreChanges(d))
-      : await saveChore({...d, name: text});
+      ? await updateChore({path:d.path, name:text}, choreChanges(d, category))
+      : await saveChore({...d, name: text, category});
+    bumpChoreDraft(d, text, category);
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device — will upload when online' : (d.path ? `${text} updated` : `Added ${text}`));
     setTimeout(() => refresh(true), 1500);
@@ -3437,8 +3560,15 @@ async function submitRemoveChoreDraft(){
     // Retired, not deleted — active:false is the template's own documented
     // way to drop a chore from view without losing its streak history.
     const r = await updateChore({path:d.path, name:d.text}, { active: false });
-    closeSheet();
-    toast(r === 'queued' ? 'Saved on device' : `${d.text} removed — pull to refresh to update the list`);
+    bump(dd => {
+      dd.chores.all = (dd.chores.all||[]).filter(x => x.path !== d.path);
+      dd.chores.due = (dd.chores.due||[]).filter(x => x.path !== d.path);
+      dd.chores.overdue = (dd.chores.overdue||[]).filter(x => x.path !== d.path);
+      dd.chores.due_count = (dd.chores.due||[]).length;
+      dd.chores.overdue_count = (dd.chores.overdue||[]).length;
+    });
+    closeSheet(); render();
+    toast(r === 'queued' ? 'Saved on device' : `${d.text} removed`);
   } catch(e){ toast('Failed: ' + e.message); }
 }
 
