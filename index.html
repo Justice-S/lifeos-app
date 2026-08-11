@@ -15,6 +15,10 @@
   --bg:#000000; --panel:#141414; --panel2:#1e1e1e; --line:#2c2c2c;
   --text:#f2f2f2; --dim:#9a9a9a; --accent:#ff8a3d; --ink:#1a0f05; --good:#3fb950;
   --warn:#d29922; --bad:#f85149; --radius:14px;
+  --warn-bg:rgba(210,153,34,.1); --warn-line:rgba(210,153,34,.35); --warn-text:#f0c674;
+  --on-bad:#ffffff; --on-accent:var(--ink);
+  --nav-bg:rgba(0,0,0,.93); --scrim:rgba(0,0,0,.6); --scrim-strong:rgba(0,0,0,.55);
+  --accent-glow:rgba(255,138,61,.45);
   --safe-top:env(safe-area-inset-top); --safe-bot:env(safe-area-inset-bottom);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -84,9 +88,9 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 .amt{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600}
 .bar{height:6px;background:var(--panel2);border-radius:4px;overflow:hidden;margin-top:8px}
 .bar>i{display:block;height:100%;background:var(--accent)}
-.nudge{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.35);color:#f0c674;
+.nudge{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-text);
   border-radius:12px;padding:11px 13px;margin-bottom:8px;font-size:14px}
-nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(0,0,0,.93);
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--nav-bg);
   backdrop-filter:blur(16px);border-top:1px solid var(--line);padding-bottom:var(--safe-bot);z-index:50;
   transition:padding-bottom .3s ease}
 nav button{flex:1;padding:9px 0 7px;font-size:10px;color:var(--dim);display:flex;flex-direction:column;
@@ -99,14 +103,14 @@ nav button.center{font-weight:700;color:var(--text)}
 nav button.center.on{color:var(--accent)}
 nav button.center .badge{width:44px;height:44px;border-radius:50%;background:var(--accent);
   display:flex;align-items:center;justify-content:center;margin-top:-20px;
-  box-shadow:0 4px 14px rgba(255,138,61,.45);border:3px solid var(--bg)}
+  box-shadow:0 4px 14px var(--accent-glow);border:3px solid var(--bg)}
 nav button.center .badge .i{font-size:20px;line-height:1;color:var(--ink)}
-.sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;align-items:flex-end}
+.sheet{position:fixed;inset:0;background:var(--scrim);z-index:100;display:none;align-items:flex-end}
 .sheet.on{display:flex}
 .sheet>div{background:var(--bg);width:100%;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;
   padding:8px 16px calc(var(--safe-bot) + 24px);border-top:1px solid var(--line);max-width:640px;margin:0 auto}
 .handle{width:38px;height:4px;background:var(--line);border-radius:3px;margin:8px auto 14px}
-.confirm{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:150;display:none;
+.confirm{position:fixed;inset:0;background:var(--scrim-strong);z-index:150;display:none;
   align-items:center;justify-content:center;padding:24px}
 .confirm.on{display:flex}
 .confirm .ccard{background:var(--panel);border:1px solid var(--line);border-radius:16px;
@@ -125,7 +129,7 @@ textarea{min-height:88px;resize:vertical}
 .chip{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:8px 13px;font-size:14px}
 .chip.on{background:var(--accent);color:var(--ink);border-color:var(--accent);font-weight:600}
 .pill{font-size:11px;padding:3px 8px;border-radius:20px;background:var(--panel2);color:var(--dim)}
-.pill.bad{background:var(--bad);color:#fff}
+.pill.bad{background:var(--bad);color:var(--on-bad)}
 .status{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:6px}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--dim)}
 .dot.ok{background:var(--good)} .dot.off{background:var(--warn)} .dot.err{background:var(--bad)}
@@ -1644,6 +1648,58 @@ function bumpChore(name){
   });
 }
 
+/* Undo for a chore ticked off today -- removes the log row logChore() just
+   appended rather than adding a *third* writer that pokes done_this_period/
+   due directly (CLAUDE.md #11 is only about the two writers that already
+   exist, the phone's log-append and update_chores.py's derive-from-log
+   pass, but the spirit -- don't hand-patch what the log is supposed to be
+   the one source of truth for -- applies just as much to removing a
+   completion as adding one). Always targets the LAST row matching this
+   chore on today's date, i.e. "undo the most recent thing I did" -- there's
+   no picker for which of several same-day ticks to remove, and callers
+   only offer this for last_done === today (see viewChores()) so there's
+   always at least one such row to find. No offline fallback on purpose,
+   unlike logChore(): appending can safely start a fresh log file if the
+   current one can't be read, but removing a specific row can't -- without
+   the real remote content there's nothing to safely remove. */
+async function unlogChore(name){
+  const date = todayISO();
+  const path = choreLogPath(date);
+  const cur = await getFile(path);
+  if(!cur) throw new Error('No log entry found for today');
+  const lines = cur.text.split('\n');
+  let lastIdx = -1;
+  for(let i = 0; i < lines.length; i++){
+    const m = lines[i].match(/^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|\s*$/);
+    if(m && m[1] === date && m[3] === name) lastIdx = i;
+  }
+  if(lastIdx < 0) throw new Error('No matching log entry found for today');
+  lines.splice(lastIdx, 1);
+  return write(path, lines.join('\n'), `Undo chore: ${name}`, { mode:'update' });
+}
+
+/* Reverses bumpChore()'s local reflection. streak isn't touched here --
+   same reasoning as bumpChoreDraft: only update_chores.py replaying the
+   full log can really derive it, and a stale streak self-corrects on the
+   next real summary rebuild same as it already does elsewhere. What DOES
+   need to flip immediately is whatever put this chore in "Done, and when
+   it comes back" in the first place, or the undo looks like it silently
+   failed until CI catches up. */
+function bumpChoreUndo(name){
+  bump(d => {
+    if(!d.chores) return;
+    const c = (d.chores.all || []).find(x => x.name === name);
+    if(!c) return;
+    c.done_this_period = Math.max(0, (c.done_this_period || 0) - 1);
+    c.remaining = (c.times_per_period || 1) - c.done_this_period;
+    if(c.done_this_period === 0) c.last_done = '';
+    c.due = true; c.overdue_days = 0;
+    d.chores.due = d.chores.due || [];
+    if(!d.chores.due.some(x => x.name === name)) d.chores.due.unshift(c);
+    d.chores.due_count = d.chores.due.length;
+  });
+}
+
 const FREQ_LABEL = c => c.due_recur === 'every_n_days'
   ? `Every ${c.due_every_days} days`
   : (CHORE_FREQ_LABELS[c.due_recur] || c.due_recur) + (c.times_per_period > 1 ? ` ×${c.times_per_period}` : '');
@@ -1681,6 +1737,21 @@ async function tickChore(i, btn){
     toast(r === 'queued' ? `${c.name} saved on device` : `${c.name} done`);
   } catch(e){
     btn.disabled = false; btn.textContent = '✓';
+    toast('Failed: ' + e.message);
+  }
+}
+
+async function undoChore(i, btn){
+  const c = CHOREREFS[i];
+  if(!c) return toast('Chore not found');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await unlogChore(c.name);
+    bumpChoreUndo(c.name);
+    render();
+    toast(r === 'queued' ? `${c.name} saved on device` : `${c.name} marked not done`);
+  } catch(e){
+    btn.disabled = false; btn.textContent = 'Undo';
     toast('Failed: ' + e.message);
   }
 }
@@ -1807,13 +1878,22 @@ function viewChores(){
   const notDue = (ch.all || []).filter(c => !c.due && choreMatchesFilter(c));
   if(notDue.length){
     h += `<h2>Done, and when it comes back</h2><div class="list">` + notDue.map(c => { const i = choreRef(c);
+      // Undo only ever targets a completion that happened today -- a chore
+      // finished yesterday or earlier has no "last thing I did" to walk
+      // back from here, and picking a specific old log row to remove would
+      // need a date to remove it FROM, which this list doesn't show (see
+      // undoChore()/unlogChore() below for why today-only keeps this safe).
+      const doneToday = c.last_done === todayISO();
       return `<div class="item">
         <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
           onclick="sheetEditChore(${i})">
           <div class="m muted">${esc(c.name)}</div>
           <div class="s">${esc(FREQ_LABEL(c))}${c.streak > 1 ? ` · ${c.streak} in a row` : ''}</div>
         </button>
-        <div class="s" style="white-space:nowrap">${esc(c.next_due || '')}</div>
+        ${doneToday
+          ? `<button type="button" class="chip" style="padding:6px 10px;font-size:12px"
+              onclick="undoChore(${i}, this)">Undo</button>`
+          : `<div class="s" style="white-space:nowrap">${esc(c.next_due || '')}</div>`}
       </div>`; }).join('') + `</div>`;
   }
 
