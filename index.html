@@ -546,6 +546,48 @@ async function write(path, text, message, opts={}){
   }
 }
 
+/* getFile(), but checks the local write queue first for a not-yet-synced
+   write to this exact path -- without this, patching something you just
+   created (or just edited) before ITS OWN write has actually reached
+   GitHub -- whether because you're offline, or because that earlier write
+   happened to queue after a transient failure (see write()'s catch-and-
+   queue fallback above) -- fails with a "missing" error that has nothing
+   to do with what's actually wrong: the note exists, just not on GitHub
+   yet. This is exactly what made a brand-new task "struggle" to be marked
+   complete -- tap the tick fast enough after adding it and setTaskNoteDone
+   (below) would getFile() a path that's still sitting in the queue,
+   unrelated to whether the note itself was ever wrong. Picks the LAST
+   queued op for this path (there could be a create followed by an earlier
+   edit, both still unflushed) since that's the freshest state to build on.
+   Plain writes only (!op.kind) -- mergeWrite's queued shape carries fields
+   to re-resolve, not a ready body, and nothing chore/task-related ever
+   goes through mergeWrite anyway. */
+async function getFilePending(path){
+  const mine = (await queueAll()).filter(op => op.path === path && !op.kind && typeof op.text === 'string');
+  if(mine.length) return { text: mine[mine.length - 1].text, pendingIds: mine.map(op => op.id) };
+  const cur = await getFile(path);
+  return cur ? { text: cur.text, pendingIds: null } : null;
+}
+
+/* Read-patch-write built on getFilePending() above -- use this instead of
+   a bare getFile()-then-write() anywhere the note being patched might only
+   exist as a queued write so far (a chore/task note, right after saveChore()
+   -- see setTaskNoteDone()/updateChore()). When the current text came from
+   the queue, every one of those queued ops for this path is deleted before
+   the new write goes out, so this cleanly replaces the whole chain instead
+   of adding one more link that flushQueue() would later apply on top and
+   conflict with (a queued 'update' with no sha, once an earlier queued
+   'create' for the same path has already landed for real, is a write
+   GitHub will reject -- same class of problem mergeWrite's own comment
+   above describes for a daily note, just for a full-text patch here
+   instead of a merge function). */
+async function writePending(path, patchFn, message){
+  const cur = await getFilePending(path);
+  if(!cur) throw new Error('Note missing');
+  if(cur.pendingIds) for(const id of cur.pendingIds) await queueDel(id);
+  return write(path, patchFn(cur.text), message, { mode:'update' });
+}
+
 /* Read-modify-write ops that patch a daily note (check-in, add-a-task)
    go through here instead of write(). They queue {kind, fields} -- the
    raw inputs -- rather than a pre-resolved file body, and re-run the
@@ -1094,11 +1136,11 @@ async function runOp(op){
    other recur-conditional field here) -- harmless, since build_summary.py
    only reads done_date for notes where done is still true. */
 async function setTaskNoteDone(t, done){
-  const cur = await getFile(vpath(t.path));
-  if(!cur) throw new Error('Task note missing');
-  let md = setFm(cur.text, 'done', done);
-  if(done) md = setFm(md, 'done_date', todayISO());
-  return write(vpath(t.path), md, `${done ? 'Done' : 'Reopen'}: ${t.text.slice(0,50)}`, { mode:'update' });
+  return writePending(vpath(t.path), md => {
+    let out = setFm(md, 'done', done);
+    if(done) out = setFm(out, 'done_date', todayISO());
+    return out;
+  }, `${done ? 'Done' : 'Reopen'}: ${t.text.slice(0,50)}`);
 }
 
 // Looks a task up by id, open OR done -- ids are unique across both lists
@@ -1319,13 +1361,18 @@ async function saveChore(c){
    whatever due-date field/times_per_period it needs, area, pet, due_time,
    notifications, active, and (one-time items only) text — see
    choreChanges(). Renaming a recurring chore isn't supported here (that
-   means moving the file); edit the note directly in Obsidian for that. */
+   means moving the file); edit the note directly in Obsidian for that.
+   Goes through writePending() (see above), not a bare getFile()+write(),
+   for the same reason setTaskNoteDone() does: edit a chore/task quickly
+   enough after adding it -- easy to do, since sheetEditChore() opens right
+   from the item bumpChoreDraft() just added to the list -- and its own
+   saveChore() write might still only be sitting in the queue. */
 async function updateChore(c, changes){
-  const cur = await getFile(vpath(c.path));
-  if(!cur) throw new Error('Chore file missing');
-  let md = cur.text;
-  for(const [k, v] of Object.entries(changes)) md = setFm(md, k, v);
-  return write(vpath(c.path), md, `Update chore: ${c.name}`, { mode:'update' });
+  return writePending(vpath(c.path), md => {
+    let out = md;
+    for(const [k, v] of Object.entries(changes)) out = setFm(out, k, v);
+    return out;
+  }, `Update chore: ${c.name}`);
 }
 
 /* Same patch-in-place pattern as updateChore -- a goal's "name" is its
