@@ -2949,16 +2949,52 @@ const VIEWS = { today:viewToday, chores:viewChores, talk:viewTalk, money:viewMon
 // slower CSS transition (see #app/nav's transition above -- still worth
 // keeping for whatever genuine dvh recalculation remains, just not the
 // main cause).
+// Preserving the actively-focused field across the innerHTML swap below is
+// what actually fixed the notification-deadzone field "not saving" --
+// ensureReminderConfig()/ensureActionsUsage() (see the comment above) each
+// force an unprompted render() once their own fetch resolves, and that's
+// completely unrelated to the Schedule section a user might be mid-typing
+// in at that exact moment (Usage's fetch has nothing to do with Schedule,
+// and vice versa) -- but a bare innerHTML replace doesn't know that, it
+// just wipes whatever was typed and rebuilds every input from REMINDER_CFG's
+// last-SAVED state, silently, with no error. The number went in fine; it
+// just never survived to the tap on "Save schedule" if anything else in
+// the app happened to re-render first. Scoped to the one element that was
+// actually focused (an <input>/<textarea> — chip/tick toggles elsewhere in
+// an open sheet have the same exposure but no single "focused" element to
+// key off, so they're not covered here; a real fix for those would need
+// something closer to a virtual-DOM diff, out of scope for what this bug
+// report was actually about).
+function preservedFocus(fn){
+  const appEl = $('#app');
+  const active = appEl && appEl.contains(document.activeElement) ? document.activeElement : null;
+  const id = active && active.id;
+  const value = active && 'value' in active ? active.value : null;
+  const selStart = active && typeof active.selectionStart === 'number' ? active.selectionStart : null;
+  const selEnd = active && typeof active.selectionEnd === 'number' ? active.selectionEnd : null;
+  fn();
+  if(!id) return;
+  const restored = document.getElementById(id);
+  if(!restored) return;
+  if(value !== null) restored.value = value;
+  restored.focus();
+  if(selStart !== null && restored.setSelectionRange){
+    try { restored.setSelectionRange(selStart, selEnd); } catch(e){ /* not a text-selectable input type */ }
+  }
+}
+
 function render(){
-  GOALREFS = [];
-  ACHIEVEMENTREFS = [];
-  CHOREREFS = [];
-  WORKOUTREFS = [];
-  METRICREFS = [];
-  TXNREFS = [];
-  DAYREFS = [];
-  $('#app').innerHTML = (VIEWS[view] || viewToday)();
-  document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
+  preservedFocus(() => {
+    GOALREFS = [];
+    ACHIEVEMENTREFS = [];
+    CHOREREFS = [];
+    WORKOUTREFS = [];
+    METRICREFS = [];
+    TXNREFS = [];
+    DAYREFS = [];
+    $('#app').innerHTML = (VIEWS[view] || viewToday)();
+    document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
+  });
   if(view === 'settings') queueAll().then(q =>
     { const n = $('#queueInfo'); if(n) n.textContent = q.length ? `${q.length} entries waiting to upload.` : 'Nothing waiting to upload.'; });
 }
