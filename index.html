@@ -775,10 +775,7 @@ function mergeCheckinInto(md, f){
   if(f.win)     md = appendSection(md, 'Wins', `- ${f.win}`);
   return md;
 }
-function mergeTaskAddInto(md, fields){
-  return appendSection(md, 'Open loops', `- [ ] ${fields.text}`);
-}
-const MERGE_FNS = { checkin: mergeCheckinInto, task_add: mergeTaskAddInto };
+const MERGE_FNS = { checkin: mergeCheckinInto };
 const dateFromDailyPath = path => (path.match(/(\d{4}-\d{2}-\d{2})\.md$/) || [,todayISO()])[1];
 
 async function saveCheckin(f){
@@ -891,7 +888,7 @@ function buildContext(){
     .map((g, i) => ({ id:i, name:g.name, domain:g.domain, metric:g.metric,
                       current:g.current, target:g.target, unit:g.unit }));
   window.__goalIndex = (life.goals || []).filter(g => g.status === 'active');
-  const tasks = (life.open_tasks || []).slice(0, 25).map(t => ({ id:t.id, text:t.text }));
+  const tasks = ((d.chores && d.chores.tasks) || []).slice(0, 25).map(t => ({ id:t.id, text:t.text }));
   const chores = ((d.chores && d.chores.due) || []).slice(0, 20);
   const allChores = ((d.chores && d.chores.all) || []).map(c => c.name);
   const today = todayISO();
@@ -914,7 +911,7 @@ Activities commonly logged: ${ACTIVITIES.join(', ')}
 Active goals:
 ${goals.length ? goals.map(g => `  [${g.id}] ${g.name} (${g.domain}) — ${g.metric || 'no metric'}: ${g.current} of ${g.target} ${g.unit || ''}`).join('\n') : '  none'}
 
-Open tasks:
+Open tasks (chores that haven't been set to recur):
 ${tasks.length ? tasks.map(t => `  [${t.id}] ${t.text}`).join('\n') : '  none'}
 
 Chores due (use these names exactly):
@@ -1045,18 +1042,15 @@ async function runOp(op){
     }
     case 'task_done':  return completeTask(op.task_id);
     case 'task_add': {
-      // A due date (or recurrence) makes this a chore note (see saveChore)
-      // instead of a plain checklist line -- the common case (no due date)
-      // is unchanged. due_recur is one of daily/weekly/monthly here (the
-      // dictation prompt never offers every_n_days for a plain task_add).
-      if(op.due_date || op.due_recur){
-        const recur = ['daily','weekly','monthly'].includes(op.due_recur) ? op.due_recur : '';
-        return saveChore({ name: op.text, due_date: op.due_date || '', due_recur: recur,
-          due_day: op.due_day != null ? op.due_day : '',
-          due_weekday: op.due_weekday != null ? op.due_weekday : '',
-          due_time: roundHalfHour(op.due_time), notifications: [] });
-      }
-      return addTask(op.text, date);
+      // Every task is a chore note now, due date or not (CLAUDE.md #25) --
+      // there's no separate lightweight checklist mechanism to fall back
+      // to. due_recur is one of daily/weekly/monthly here (the dictation
+      // prompt never offers every_n_days for a plain task_add).
+      const recur = ['daily','weekly','monthly'].includes(op.due_recur) ? op.due_recur : '';
+      return saveChore({ name: op.text, due_date: op.due_date || '', due_recur: recur,
+        due_day: op.due_day != null ? op.due_day : '',
+        due_weekday: op.due_weekday != null ? op.due_weekday : '',
+        due_time: roundHalfHour(op.due_time), notifications: [] });
     }
     case 'achievement':return saveAchievement({ title:op.title, domain:op.domain || 'life', date, note:op.note || '' });
     case 'chore_done': {
@@ -1073,16 +1067,15 @@ async function runOp(op){
   }
 }
 
-/* A due-date chore (kind: 'note' -- a one-time chore, what the app calls a
-   "task", see CLAUDE.md #25/#37) is its own file with done/done_date
-   frontmatter flags -- setting those is the whole operation, unlike a
-   checklist task's line-editing dance below. Completion isn't permanent
-   (see toggleTask/CLAUDE.md #21): done_date drives sorting in the
-   Completed list, and going back to false leaves a stale done_date on the
-   note rather than clearing it (setFm() is a no-op on '', same tolerated
-   staleness as every other recur-conditional field here) -- harmless,
-   since build_summary.py only reads done_date for notes where done is
-   still true. */
+/* A task is a chore that hasn't been set to recur (CLAUDE.md #25) -- its
+   own file with done/done_date frontmatter flags, no separate lightweight
+   checklist mechanism anymore. Setting those two fields is the whole
+   completion operation. Completion isn't permanent (see toggleTask/
+   CLAUDE.md #21): done_date drives sorting in the Completed section, and
+   going back to false leaves a stale done_date on the note rather than
+   clearing it (setFm() is a no-op on '', same tolerated staleness as every
+   other recur-conditional field here) -- harmless, since build_summary.py
+   only reads done_date for notes where done is still true. */
 async function setTaskNoteDone(t, done){
   const cur = await getFile(vpath(t.path));
   if(!cur) throw new Error('Task note missing');
@@ -1091,87 +1084,31 @@ async function setTaskNoteDone(t, done){
   return write(vpath(t.path), md, `${done ? 'Done' : 'Reopen'}: ${t.text.slice(0,50)}`, { mode:'update' });
 }
 
-/* Shared checklist-line lookup: t.line is usually accurate (from the last
-   summary rebuild); the regex fallback covers it going stale between
-   rebuilds, matching on text rather than position. stateRe narrows the
-   fallback to a specific check state when the caller cares (complete only
-   wants an open box, uncomplete only a checked one); rename/delete don't,
-   so they get any checkbox state via the default. */
-function findTaskLine(lines, t, stateRe){
-  if(lines[t.line] && lines[t.line].includes(t.text)) return t.line;
-  return lines.findIndex(l => (stateRe || /^\s*[-*]\s*\[[ xX]\]/).test(l) && l.includes(t.text));
-}
-
-// Looks a task/one-time due chore up by id, open OR completed -- ids are
-// unique across both lists (build_summary.py numbers completed_tasks
-// starting where open_tasks left off), since completion is a toggle now,
-// not a permanent move off a list the app can forget about (CLAUDE.md #21).
+// Looks a task up by id, open OR done -- ids are unique across both lists
+// (build_summary.py numbers chores.tasks_done starting where chores.tasks
+// left off), since completion is a toggle, not a permanent move off a
+// list the app can forget about (CLAUDE.md #21).
 function findTaskById(id){
-  return ((DATA && DATA.life.open_tasks) || []).find(x => x.id === id)
-    || ((DATA && DATA.life.completed_tasks) || []).find(x => x.id === id);
+  return ((DATA && DATA.chores && DATA.chores.tasks) || []).find(x => x.id === id)
+    || ((DATA && DATA.chores && DATA.chores.tasks_done) || []).find(x => x.id === id);
 }
 
 async function completeTask(id){
   const t = findTaskById(id);
   if(!t) throw new Error('Task not found');
-  if(t.kind === 'note') return setTaskNoteDone(t, true);
-  const cur = await getFile(vpath(t.path));
-  if(!cur) throw new Error('Task file missing');
-  const lines = cur.text.split('\n');
-  const hit = findTaskLine(lines, t, /^\s*[-*]\s*\[ \]/);
-  if(hit < 0) throw new Error('Could not find that task line');
-  lines[hit] = lines[hit].replace(/\[ \]/, '[x]');
-  return write(vpath(t.path), lines.join('\n'), `Done: ${t.text.slice(0,50)}`, { mode:'update' });
+  return setTaskNoteDone(t, true);
 }
 
-/* Mirror of completeTask — flips a checked box back open (or a task note's
-   done flag back to false). The checklist line lookup works in both
-   directions since it matches on text, not check state. */
 async function uncompleteTask(id){
   const t = findTaskById(id);
   if(!t) throw new Error('Task not found');
-  if(t.kind === 'note') return setTaskNoteDone(t, false);
-  const cur = await getFile(vpath(t.path));
-  if(!cur) throw new Error('Task file missing');
-  const lines = cur.text.split('\n');
-  const hit = findTaskLine(lines, t, /^\s*[-*]\s*\[[xX]\]/);
-  if(hit < 0) throw new Error('Could not find that task line');
-  lines[hit] = lines[hit].replace(/\[[xX]\]/, '[ ]');
-  return write(vpath(t.path), lines.join('\n'), `Reopen: ${t.text.slice(0,50)}`, { mode:'update' });
+  return setTaskNoteDone(t, false);
 }
 
-/* Renames a checklist task in place -- preserves the bullet marker and
-   current check state, replaces only the text after it. */
-async function renameChecklistTask(t, newText){
-  const cur = await getFile(vpath(t.path));
-  if(!cur) throw new Error('Task file missing');
-  const lines = cur.text.split('\n');
-  const hit = findTaskLine(lines, t);
-  if(hit < 0) throw new Error('Could not find that task line');
-  lines[hit] = lines[hit].replace(/^(\s*[-*]\s*\[[ xX]\]\s*).*/, (_, prefix) => prefix + newText);
-  return write(vpath(t.path), lines.join('\n'), `Rename task: ${newText.slice(0,50)}`, { mode:'update' });
-}
-
-async function deleteChecklistTask(t){
-  const cur = await getFile(vpath(t.path));
-  if(!cur) throw new Error('Task file missing');
-  const lines = cur.text.split('\n');
-  const hit = findTaskLine(lines, t);
-  if(hit < 0) throw new Error('Could not find that task line');
-  lines.splice(hit, 1);
-  return write(vpath(t.path), lines.join('\n'), `Delete task: ${t.text.slice(0,50)}`, { mode:'update' });
-}
-
-async function addTask(text, date){
-  const path = vpath(`10 Daily/${date}.md`);
-  return mergeWrite(path, 'task_add', {text}, `Add task: ${text.slice(0,50)}`);
-}
-
-/* A due-date chore's due line: "Monthly, day 15" or "2026-08-12", plus a
-   time if one's set. Blank for a plain checklist task -- those never carry
-   due_* fields (see build_summary.py's DUE_DEFAULTS). */
+/* A task's due line: "Monthly, day 15" or "2026-08-12", plus a time if
+   one's set. Blank for a task with no due_date at all -- an open item
+   with nothing to be "due." */
 function taskDueLine(t){
-  if(t.kind !== 'note') return '';
   const when = t.due_recur === 'daily' ? 'Daily'
     : t.due_recur === 'weekly' ? `Weekly, ${WEEKDAY_LABELS[String(t.due_weekday)] || '?'}`
     : t.due_recur === 'monthly' ? `Monthly, day ${t.due_day}`
@@ -1180,22 +1117,21 @@ function taskDueLine(t){
 }
 
 function taskRow(t, opts={}){
-  const done = !!t.done, hasDue = t.kind === 'note', sub = taskDueLine(t);
+  const done = !!t.done, sub = taskDueLine(t);
   const body = `<div class="m" style="min-width:0;${done?'text-decoration:line-through;color:var(--dim)':''}">${esc(t.text)}</div>${
     sub ? `<div class="s">${esc(sub)}</div>` : ''}`;
-  const editFn = hasDue ? 'sheetEditDueChore' : 'sheetEditTask';
   return `<div class="item">
     <div style="display:flex;gap:11px;align-items:center;flex:1;min-width:0">
       <button class="tick ${done?'on':''}" onclick="toggleTask(${t.id}, this)"
         aria-label="${done?'mark not done':'mark done'}">${done?'✓':''}</button>
-      <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0" onclick="${editFn}(${t.id})">${body}</button>
+      <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0" onclick="sheetEditDueChore(${t.id})">${body}</button>
       ${t.due_today && !opts.hidePill ? '<span class="pill">today</span>' : ''}
     </div>
   </div>`;
 }
 
 // Completion isn't permanent (CLAUDE.md #21) -- a done item moves from
-// open_tasks into completed_tasks (or back) locally, rather than just
+// chores.tasks into chores.tasks_done (or back) locally, rather than just
 // flipping .done in place, so the Completed section reflects the tick
 // immediately instead of waiting for the next real summary rebuild.
 async function toggleTask(id, btn){
@@ -1206,10 +1142,10 @@ async function toggleTask(id, btn){
     const goingDone = !t.done;
     const r = goingDone ? await completeTask(id) : await uncompleteTask(id);
     bump(d => {
-      d.life.open_tasks = d.life.open_tasks || [];
-      d.life.completed_tasks = d.life.completed_tasks || [];
-      const from = goingDone ? d.life.open_tasks : d.life.completed_tasks;
-      const to = goingDone ? d.life.completed_tasks : d.life.open_tasks;
+      d.chores.tasks = d.chores.tasks || [];
+      d.chores.tasks_done = d.chores.tasks_done || [];
+      const from = goingDone ? d.chores.tasks : d.chores.tasks_done;
+      const to = goingDone ? d.chores.tasks_done : d.chores.tasks;
       const idx = from.findIndex(x => x.id === id);
       if(idx < 0) return;
       const [x] = from.splice(idx, 1);
@@ -1226,71 +1162,21 @@ async function toggleTask(id, btn){
   }
 }
 
+// Quick capture -- still one tap, but it's a full chore note underneath
+// (due_recur blank, everything else default) rather than a checklist
+// line; there's no lighter-weight object to fall back to (CLAUDE.md #25).
 async function submitAddTask(btn){
-  const text = val('lt_new');
+  const text = val('ch_new_task');
   if(!text) return;
-  const date = todayISO();
   btn.disabled = true;
   try {
-    const r = await addTask(text, date);
-    const input = document.getElementById('lt_new'); if(input) input.value = '';
-    /* reflect it immediately — the real id/line land on the next real sync */
-    bump(d => {
-      d.life.open_tasks = d.life.open_tasks || [];
-      d.life.completed_tasks = d.life.completed_tasks || [];
-      const nextId = Math.max(
-        d.life.open_tasks.reduce((m,t) => Math.max(m, t.id), -1),
-        d.life.completed_tasks.reduce((m,t) => Math.max(m, t.id), -1)) + 1;
-      d.life.open_tasks.unshift({ id: nextId, text, path: `10 Daily/${date}.md`, line: -1, source: date, done: false });
-    });
+    const r = await saveChore({ name: text, due_recur: '' });
+    const input = document.getElementById('ch_new_task'); if(input) input.value = '';
     render();
-    toast(r === 'queued' ? 'Saved on device' : 'Task added');
+    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Task added');
+    setTimeout(() => refresh(true), 1500);
   } catch(e){ toast('Failed: ' + e.message); }
   finally { btn.disabled = false; }
-}
-
-// Plain checklist tasks only -- a due-date chore's edit sheet is
-// sheetEditDueChore() (see taskRow()'s editFn branch), which also covers
-// renaming it (the "text" field there).
-function sheetEditTask(id){
-  const t = findTaskById(id);
-  if(!t) return toast('Not found');
-  openSheet(`<h1 style="font-size:22px">Edit task</h1>
-    <label>Text</label><input id="et_text" value="${esc(t.text)}" autocapitalize="sentences">
-    <button class="btn" style="margin-top:18px" onclick="submitEditTask(this, ${id})">Save</button>
-    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
-    <button class="btn danger" style="margin-top:8px" onclick="submitDeleteTask(${id})">Delete</button>`);
-}
-
-async function submitEditTask(btn, id){
-  const t = findTaskById(id);
-  if(!t) return toast('Not found');
-  const text = val('et_text');
-  if(!text) return toast('Give it some text');
-  btn.disabled = true; btn.textContent = 'Saving…';
-  try {
-    const r = await renameChecklistTask(t, text);
-    bump(d => {
-      const x = (d.life.open_tasks||[]).find(y => y.id === id) || (d.life.completed_tasks||[]).find(y => y.id === id);
-      if(x) x.text = text;
-    });
-    closeSheet(); render();
-    toast(r === 'queued' ? 'Saved on device' : 'Task updated');
-  } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
-}
-
-async function submitDeleteTask(id){
-  const t = findTaskById(id);
-  if(!t) return toast('Not found');
-  try {
-    await deleteChecklistTask(t);
-    bump(d => {
-      d.life.open_tasks = (d.life.open_tasks||[]).filter(x => x.id !== id);
-      d.life.completed_tasks = (d.life.completed_tasks||[]).filter(x => x.id !== id);
-    });
-    closeSheet(); render();
-    toast('Deleted');
-  } catch(e){ toast('Failed: ' + e.message); }
 }
 
 /* Builds a brand-new chore note -- 50 Chores/Definitions/{name}.md,
@@ -1765,6 +1651,33 @@ function viewChores(){
     h += groups.map(g => collapsible(`chorecat:${g.cat}`, CHORE_CATEGORY_LABELS[g.cat] || g.cat,
       `<div class="list">` + g.items.map(c => choreRow(c, choreRef(c))).join('') + `</div>`,
       {subtitle: String(g.items.length)})).join('');
+  }
+
+  // Tasks -- a chore that hasn't been set to recur (CLAUDE.md #25). Lives
+  // here, not on the Life tab, same as everything else chore-shaped;
+  // there's no separate lightweight object for a quick one-liner anymore,
+  // just a chore note with due_recur blank.
+  const tasks = d.chores.tasks || [];
+  h += `<h2>Tasks</h2>`;
+  h += tasks.length
+    ? `<div class="list">` + tasks.map(t => taskRow(t)).join('') + `</div>`
+    : `<div class="empty">Nothing open. Add one below.</div>`;
+  h += `<div class="row" style="gap:8px;margin-top:10px">
+    <input id="ch_new_task" placeholder="Add a task">
+    <button class="btn" style="width:auto;padding:13px 18px" onclick="submitAddTask(this)">Add</button>
+  </div>
+  <p class="sub" style="margin-top:8px">Need a due date, a specific time, or its own notifications?
+  <a href="#" onclick="sheetAddChore();return false">Give it one</a> — tap the new task above once
+  it's added, or start from a blank one directly.</p>`;
+
+  const completed = d.chores.tasks_done || [];
+  if(completed.length){
+    // Completion isn't permanent (CLAUDE.md #21) -- tapping a row's tick
+    // here moves it straight back into Tasks (toggleTask), same component
+    // as the list above, just fed the other array.
+    h += collapsible('completed_tasks', 'Completed',
+      `<div class="list">` + completed.map(t => taskRow(t, {hidePill:true})).join('') + `</div>`,
+      {subtitle: String(completed.length)});
   }
 
   const notDue = (ch.all || []).filter(c => !c.due && choreMatchesFilter(c));
@@ -2333,7 +2246,7 @@ function choresStrip(){
 }
 
 function dueStrip(){
-  const due = ((DATA && DATA.life && DATA.life.open_tasks) || []).filter(t => t.due_today);
+  const due = ((DATA && DATA.chores && DATA.chores.tasks) || []).filter(t => t.due_today);
   if(!due.length) return '';
   return `<div class="card" style="margin-top:10px">
     <div class="row"><b>Due today</b><span class="sub">${due.length}</span></div>
@@ -2604,27 +2517,6 @@ function viewLife(){
   const active = (d.life.goals||[]).filter(g => g.status === 'active');
   h += `<h2>Goals</h2>` + (active.length ? active.map(g => goalCard(g)).join('')
        : `<div class="empty">No active goals. Add one in Obsidian and it shows up here.</div>`);
-  const tasks = d.life.open_tasks || [];
-  h += `<h2>Open tasks</h2>`;
-  h += tasks.length
-    ? `<div class="list">` + tasks.map(t => taskRow(t)).join('') + `</div>`
-    : `<div class="empty">Nothing open. Add one below.</div>`;
-  h += `<div class="row" style="gap:8px;margin-top:10px">
-    <input id="lt_new" placeholder="Add a task">
-    <button class="btn" style="width:auto;padding:13px 18px" onclick="submitAddTask(this)">Add</button>
-  </div>
-  <p class="sub" style="margin-top:8px">Need a due date, a specific time, or its own notifications?
-  <a href="#" onclick="sheetAddChore();return false">Add a due date</a> instead — it'll show up in the
-  list above, right alongside everything else.</p>`;
-  const completed = d.life.completed_tasks || [];
-  if(completed.length){
-    // Completion isn't permanent (CLAUDE.md #21) -- tapping a row's tick
-    // here moves it straight back into Open tasks (toggleTask), same
-    // component as the list above, just fed the other array.
-    h += collapsible('completed_tasks', 'Completed',
-      `<div class="list">` + completed.map(t => taskRow(t, {hidePill:true})).join('') + `</div>`,
-      {subtitle: String(completed.length)});
-  }
   if(d.life.days && d.life.days.length){
     h += `<h2>Recent days</h2><div class="list">` + d.life.days.slice(0,14).map(x => { const i = dayRef(x);
       return `<div class="item">
@@ -3391,8 +3283,8 @@ function blankChoreDraft(recur){
     times_per_period:'1', area:'', pet:'', due_time:'', notifications:[] };
 }
 
-// c is either a CHOREREFS entry (recurring, carries .name) or an
-// open_tasks/completed_tasks entry (one-time, carries .text) -- both share
+// c is either a CHOREREFS entry (recurring, carries .name) or a
+// chores.tasks/tasks_done entry (one-time, carries .text) -- both share
 // enough of the same shape (see build_summary.py's chores "base" dict)
 // that one mapping handles either. origRecur is captured once here, not
 // re-derived from the live (editable) due_recur below -- it's what decides
@@ -3429,9 +3321,9 @@ function sheetEditChore(i){
   renderChoreSheet();
 }
 
-// One-time due chores ("tasks"), reached from the Life tab's open/completed
-// task lists — looked up by id, same as sheetEditTask, rather than a
-// separate ref array, since open_tasks/completed_tasks already are one.
+// Tasks (chores with due_recur blank), reached from the Chores tab's
+// Tasks/Completed lists — looked up by id rather than a separate ref
+// array, since chores.tasks/tasks_done already are one.
 function sheetEditDueChore(id){
   const t = findTaskById(id);
   if(!t) return toast('Not found');
@@ -3555,8 +3447,8 @@ async function submitDeleteDueChore(){
   try {
     await deleteDueChore({path:d.path, text:d.text});
     bump(dd => {
-      dd.life.open_tasks = (dd.life.open_tasks||[]).filter(x => x.path !== d.path);
-      dd.life.completed_tasks = (dd.life.completed_tasks||[]).filter(x => x.path !== d.path);
+      dd.chores.tasks = (dd.chores.tasks||[]).filter(x => x.path !== d.path);
+      dd.chores.tasks_done = (dd.chores.tasks_done||[]).filter(x => x.path !== d.path);
     });
     closeSheet(); render();
     toast('Deleted');
