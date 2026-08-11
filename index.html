@@ -1711,7 +1711,8 @@ function renderChoreFilters(ch){
     <label>Frequency</label>
     ${choreFilterChips('freq', ['all', ...CHORE_FREQS],
       v => v==='all' ? 'All' : (CHORE_FREQ_LABELS[v]||v), CHORE_FILTER.freq)}
-    ${active ? `<button class="btn sec" style="margin-top:12px" onclick="clearChoreFilters()">Clear filters</button>` : ''}
+    ${active ? `<button type="button" class="chip" style="margin-top:12px;opacity:.7"
+      onclick="clearChoreFilters()">✕ Clear filters</button>` : ''}
   </div>`;
   return collapsible('chorefilters', 'Filters', body, {subtitle: active ? 'active' : ''});
 }
@@ -1727,18 +1728,25 @@ function viewChores(){
 
   h += renderChoreFilters(ch);
 
-  const due = (ch.due || []).filter(choreMatchesFilter);
-  h += `<h2>Due${due.length ? '' : ' — nothing else'}</h2>`;
-  if(!due.length){
-    h += `<div class="card"><span class="sub">${choreFilterActive()
-      ? 'Nothing due matches these filters.' : 'Everything is done. Go and enjoy that.'}</span></div>`;
-  } else {
-    const groups = CHORE_CATEGORIES
-      .map(cat => ({cat, items: due.filter(c => c.category === cat)}))
-      .filter(g => g.items.length);
-    h += groups.map(g => collapsible(`chorecat:${g.cat}`, CHORE_CATEGORY_LABELS[g.cat] || g.cat,
-      `<div class="list">` + g.items.map(c => choreRow(c, choreRef(c))).join('') + `</div>`,
-      {subtitle: String(g.items.length)})).join('');
+  // Overdue -- pinned above everything else and never collapsible, on
+  // purpose: it's the one thing on this tab that should never take a tap
+  // to reveal. Pools both flavors of "late" (CLAUDE.md #25) -- a recurring
+  // chore past its due date (ch.overdue, overdue_days>0, already sorted
+  // worst-first by build_summary.py) and a one-time task whose next_date
+  // has passed (no overdue_days field for those -- see taskRow) -- since
+  // from here "is this late" matters more than which kind of chore it is.
+  // Anything shown here is excluded from Due/Tasks below so nothing is
+  // ever listed twice.
+  const allTasks = d.chores.tasks || [];
+  const isOverdueTask = t => !!(t.next_date && t.next_date < todayISO());
+  const overdueChores = (ch.overdue || []).filter(choreMatchesFilter);
+  const overdueTasks = allTasks.filter(isOverdueTask).filter(choreMatchesFilter)
+    .sort((a, b) => a.next_date.localeCompare(b.next_date));
+  if(overdueChores.length || overdueTasks.length){
+    h += `<h2>Overdue</h2><div class="list">`
+      + overdueChores.map(c => choreRow(c, choreRef(c))).join('')
+      + overdueTasks.map(t => taskRow(t)).join('')
+      + `</div>`;
   }
 
   // Tasks -- a chore that hasn't been set to recur (CLAUDE.md #25). Lives
@@ -1748,12 +1756,31 @@ function viewChores(){
   // same "Add a chore" sheet below (Repeats: One time) as everything
   // else -- a second, stripped-down quick-add input here duplicated that
   // sheet for no real benefit, right down to its own hint text pointing
-  // back at the real one.
-  const tasks = d.chores.tasks || [];
+  // back at the real one. Overdue ones already showed above.
+  const tasks = allTasks.filter(t => !isOverdueTask(t)).filter(choreMatchesFilter);
   h += `<h2>Tasks</h2>`;
   h += tasks.length
     ? `<div class="list">` + tasks.map(t => taskRow(t)).join('') + `</div>`
-    : `<div class="empty">Nothing open. Add one with "Add a chore" below.</div>`;
+    : `<div class="empty">${choreFilterActive()
+        ? 'No open tasks match these filters.' : 'Nothing open. Add one with "Add a chore" below.'}</div>`;
+
+  const due = (ch.due || []).filter(c => c.overdue_days === 0).filter(choreMatchesFilter);
+  h += `<h2>Due${due.length ? '' : ' — nothing else'}</h2>`;
+  if(!due.length){
+    h += `<div class="card"><span class="sub">${choreFilterActive()
+      ? 'Nothing due matches these filters.' : 'Everything is done. Go and enjoy that.'}</span></div>`;
+  } else {
+    // Category groups start collapsed (see OPEN_SECTIONS above) since
+    // what's actually urgent already surfaced in Overdue; forceOpen pops
+    // a group back open whenever a filter is active, so narrowing to e.g.
+    // "Pets" never hides its own matches behind a closed section.
+    const groups = CHORE_CATEGORIES
+      .map(cat => ({cat, items: due.filter(c => c.category === cat)}))
+      .filter(g => g.items.length);
+    h += groups.map(g => collapsible(`chorecat:${g.cat}`, CHORE_CATEGORY_LABELS[g.cat] || g.cat,
+      `<div class="list">` + g.items.map(c => choreRow(c, choreRef(c))).join('') + `</div>`,
+      {subtitle: String(g.items.length), forceOpen: choreFilterActive()})).join('');
+  }
 
   const completed = d.chores.tasks_done || [];
   if(completed.length){
@@ -2882,16 +2909,23 @@ function discardAndCloseSheet(){
 // survives the full innerHTML rebuild every render() does. Keyed by a caller
 // -chosen string, shared across settings sections, chore categories, and the
 // Schedule tab's seven per-day cards. Settings sections start unseeded
-// (closed); chore category groups and the Mon-Fri day cards are seeded open
-// below so the common case doesn't hide anything on first view.
-let OPEN_SECTIONS = new Set(['chorecat:home', 'chorecat:pets', 'chorecat:admin',
-  'sch_day_1', 'sch_day_2', 'sch_day_3', 'sch_day_4', 'sch_day_5', 'todayfreq:daily']);
+// (closed); the Mon-Fri day cards are seeded open below so the common case
+// doesn't hide anything on first view. Chore category groups (chorecat:*)
+// deliberately are NOT seeded -- they start collapsed, since the truly
+// urgent items already live in the always-open Overdue bucket above them
+// (see viewChores()); opts.forceOpen on collapsible() is what makes a
+// collapsed category pop back open when it still has a filter match, so
+// filtering never hides a result behind a closed section.
+let OPEN_SECTIONS = new Set(['sch_day_1', 'sch_day_2', 'sch_day_3', 'sch_day_4', 'sch_day_5', 'todayfreq:daily']);
 function toggleSection(key){
   OPEN_SECTIONS.has(key) ? OPEN_SECTIONS.delete(key) : OPEN_SECTIONS.add(key);
   render();
 }
 function collapsible(key, title, bodyHtml, opts={}){
-  const open = OPEN_SECTIONS.has(key);
+  // forceOpen doesn't touch OPEN_SECTIONS -- it's a display-only override
+  // (see the comment above) so the real collapsed/open state a user chose
+  // is still there once whatever forced it open (a filter) goes away.
+  const open = OPEN_SECTIONS.has(key) || !!opts.forceOpen;
   const sub = opts.subtitle ? `<span class="t2">${esc(opts.subtitle)}</span>` : '';
   return `<div class="collapse ${open?'open':''}">
     <button class="collapse-head" onclick="toggleSection('${key}')">
