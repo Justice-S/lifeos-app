@@ -1213,10 +1213,10 @@ async function toggleTask(id, btn){
    (blank for a new one) since only update_chores.py's log can really
    compute those; a task's due_today/next_date are recomputed with
    localDueOccurrence() so its "today"/"late" pill is right immediately.
-   d is a draft-shaped object (CHORE_DRAFT, or the minimal one
-   submitAddTask builds) -- d.path set means this is an edit, and since
-   editing can convert a chore between recurring and one-time, the existing
-   record is pulled from whichever of the three arrays it's actually in. */
+   d is a draft-shaped object (CHORE_DRAFT) -- d.path set means this is an
+   edit, and since editing can convert a chore between recurring and
+   one-time, the existing record is pulled from whichever of the three
+   arrays it's actually in. */
 function bumpChoreDraft(d, text, category){
   bump(dd => {
     dd.chores.all = dd.chores.all || [];
@@ -1261,28 +1261,6 @@ function bumpChoreDraft(d, text, category){
       (done ? dd.chores.tasks_done : dd.chores.tasks).unshift(rec);
     }
   });
-}
-
-// Quick capture -- still one tap, but it's a full chore note underneath
-// (due_recur blank, everything else default) rather than a checklist
-// line; there's no lighter-weight object to fall back to (CLAUDE.md #25).
-// Defaults to Admin rather than Home -- most one-line quick tasks ("call
-// the dentist", "renew the passport") aren't household chores.
-async function submitAddTask(btn){
-  const text = val('ch_new_task');
-  if(!text) return;
-  btn.disabled = true;
-  const draft = { path:'', due_recur:'', due_date:'', due_day:'', due_weekday:'',
-    due_every_days:'', times_per_period:'1', area:'', pet:'', due_time:'', notifications:[] };
-  try {
-    const r = await saveChore({ name: text, category:'admin', due_recur: '' });
-    bumpChoreDraft(draft, text, 'admin');
-    const input = document.getElementById('ch_new_task'); if(input) input.value = '';
-    render();
-    toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Task added');
-    setTimeout(() => refresh(true), 1500);
-  } catch(e){ toast('Failed: ' + e.message); }
-  finally { btn.disabled = false; }
 }
 
 /* Builds a brand-new chore note -- 50 Chores/Definitions/{name}.md,
@@ -1766,19 +1744,16 @@ function viewChores(){
   // Tasks -- a chore that hasn't been set to recur (CLAUDE.md #25). Lives
   // here, not on the Life tab, same as everything else chore-shaped;
   // there's no separate lightweight object for a quick one-liner anymore,
-  // just a chore note with due_recur blank.
+  // just a chore note with due_recur blank. Adding one goes through the
+  // same "Add a chore" sheet below (Repeats: One time) as everything
+  // else -- a second, stripped-down quick-add input here duplicated that
+  // sheet for no real benefit, right down to its own hint text pointing
+  // back at the real one.
   const tasks = d.chores.tasks || [];
   h += `<h2>Tasks</h2>`;
   h += tasks.length
     ? `<div class="list">` + tasks.map(t => taskRow(t)).join('') + `</div>`
-    : `<div class="empty">Nothing open. Add one below.</div>`;
-  h += `<div class="row" style="gap:8px;margin-top:10px">
-    <input id="ch_new_task" placeholder="Add a task">
-    <button class="btn" style="width:auto;padding:13px 18px" onclick="submitAddTask(this)">Add</button>
-  </div>
-  <p class="sub" style="margin-top:8px">Need a due date, a specific time, or its own notifications?
-  <a href="#" onclick="sheetAddChore();return false">Give it one</a> — tap the new task above once
-  it's added, or start from a blank one directly.</p>`;
+    : `<div class="empty">Nothing open. Add one with "Add a chore" below.</div>`;
 
   const completed = d.chores.tasks_done || [];
   if(completed.length){
