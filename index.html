@@ -2247,7 +2247,7 @@ function renderScheduleSection(){
       <div class="row">
         <b>Work hours apply</b>
         <button class="tick ${enabled?'on':''}" style="width:44px;height:28px;border-radius:14px"
-          onclick="toggleOnOffBtn(this)" id="sch_${dow}_enabled">${enabled?'On':'Off'}</button>
+          onclick="toggleOnOffBtn(this)" id="sch_${dow}_enabled" data-persist-toggle>${enabled?'On':'Off'}</button>
       </div>
       <label>Wake up</label><input id="sch_${dow}_wake" type="time" value="${esc(c.wake||'')}">
       <label>Sleep</label><input id="sch_${dow}_sleep" type="time" value="${esc(c.sleep||'')}">
@@ -2959,20 +2959,52 @@ const VIEWS = { today:viewToday, chores:viewChores, talk:viewTalk, money:viewMon
 // just wipes whatever was typed and rebuilds every input from REMINDER_CFG's
 // last-SAVED state, silently, with no error. The number went in fine; it
 // just never survived to the tap on "Save schedule" if anything else in
-// the app happened to re-render first. Scoped to the one element that was
-// actually focused (an <input>/<textarea> — chip/tick toggles elsewhere in
-// an open sheet have the same exposure but no single "focused" element to
-// key off, so they're not covered here; a real fix for those would need
-// something closer to a virtual-DOM diff, out of scope for what this bug
-// report was actually about).
-function preservedFocus(fn){
+// the app happened to re-render first. Every other direct-in-view text
+// input (not inside a sheet -- render() never touches #sheetBody, so
+// nothing there was ever exposed to this) gets the same protection for
+// free, since this only cares about "whatever's currently focused," not
+// which field it is: Settings' Connection/Voice-updates/Notifications
+// fields (an in-progress access token is a worse thing to silently lose
+// than a deadzone number) and Talk's dictation textarea included.
+//
+// [data-persist-toggle] elements (currently just the Schedule day cards'
+// "Work hours apply" switch) get the same treatment for their on/off
+// state, restored by id after the swap. This is safe SPECIFICALLY because
+// toggleOnOffBtn() never calls render() itself -- it's a bare class/text
+// flip -- so by construction, any render() that redraws one of these
+// buttons is unrelated to a click on that same button, exactly like the
+// focused-field case above. That does NOT generalize to chip rows
+// (chipRow()/pick()) or the chore-tick/task-tick buttons elsewhere: those
+// DO call render() as part of the very same click that changes their .on
+// state (a filter chip, a completed task), so blindly restoring "what was
+// .on before" there would fight the legitimate change that click just
+// made -- e.g. re-checking a task the user just unchecked, or showing two
+// mutually-exclusive filter chips selected at once. All of those already
+// live inside sheets anyway (render() never touches them) except the chore
+// filter chips, which are already state-backed by CHORE_FILTER and so
+// don't need this. Mark a future direct-in-view toggle with
+// data-persist-toggle only if it shares the same never-triggers-its-own-
+// render property this one does.
+function preservedFormState(fn){
   const appEl = $('#app');
   const active = appEl && appEl.contains(document.activeElement) ? document.activeElement : null;
   const id = active && active.id;
   const value = active && 'value' in active ? active.value : null;
   const selStart = active && typeof active.selectionStart === 'number' ? active.selectionStart : null;
   const selEnd = active && typeof active.selectionEnd === 'number' ? active.selectionEnd : null;
+  const toggles = appEl
+    ? Array.from(appEl.querySelectorAll('[data-persist-toggle]')).map(el => ({id: el.id, on: el.classList.contains('on')}))
+    : [];
+
   fn();
+
+  for(const t of toggles){
+    if(!t.id) continue;
+    const el = document.getElementById(t.id);
+    if(!el) continue;
+    el.classList.toggle('on', t.on);
+    el.textContent = t.on ? 'On' : 'Off';
+  }
   if(!id) return;
   const restored = document.getElementById(id);
   if(!restored) return;
@@ -2984,7 +3016,7 @@ function preservedFocus(fn){
 }
 
 function render(){
-  preservedFocus(() => {
+  preservedFormState(() => {
     GOALREFS = [];
     ACHIEVEMENTREFS = [];
     CHOREREFS = [];
