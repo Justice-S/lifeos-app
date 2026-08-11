@@ -2801,6 +2801,27 @@ function toggleGuestMode(){ saveCfg({guestMode: !cfg().guestMode}); render(); }
 const VIEWS = { today:viewToday, chores:viewChores, talk:viewTalk, money:viewMoney, fitness:viewFitness,
   life:viewLife, calendar:viewCalendar, settings:viewSettings };
 
+// render() re-runs the CURRENT view's markup in place -- it's called both
+// by go() on a real tab switch AND by ~40 other sites that just need the
+// DOM to reflect a state change without navigating anywhere (ticking a
+// chore, closing a sheet, clearing filters, calendar nav, and -- the one
+// that actually matters here -- ensureReminderConfig()/ensureActionsUsage()
+// calling it a second time, unprompted, once their async fetch resolves
+// after Settings has already finished its first render). Scrolling back to
+// the top belongs to the FIRST kind (a fresh page), not the second (you're
+// still looking at the same list, just updated) -- so it lives in go()
+// only, not here. It used to live here, unconditionally, which is what
+// singled out Settings for the "nav bar stuck raised" report: every other
+// tab renders once and is done, but Settings' two lazy-loaded sections
+// each force a second, unsolicited render shortly after load, and each one
+// used to snap #app.scrollTop back to 0 with no user gesture behind it --
+// on iOS Safari, a scroll position landing back at 0 is also what tells
+// Safari to re-expand its address-bar chrome, undoing whatever collapse
+// the user's own scroll had already triggered. Moving the reset into go()
+// only fixes the actual asymmetry, rather than papering over it with a
+// slower CSS transition (see #app/nav's transition above -- still worth
+// keeping for whatever genuine dvh recalculation remains, just not the
+// main cause).
 function render(){
   GOALREFS = [];
   ACHIEVEMENTREFS = [];
@@ -2811,11 +2832,10 @@ function render(){
   DAYREFS = [];
   $('#app').innerHTML = (VIEWS[view] || viewToday)();
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
-  $('#app').scrollTop = 0; // #app is the scrolling element now, not window — see its CSS rule
   if(view === 'settings') queueAll().then(q =>
     { const n = $('#queueInfo'); if(n) n.textContent = q.length ? `${q.length} entries waiting to upload.` : 'Nothing waiting to upload.'; });
 }
-function go(v){ view = v; render(); }
+function go(v){ view = v; render(); $('#app').scrollTop = 0; }
 
 /* ============================ sheets ============================ */
 
