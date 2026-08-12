@@ -1197,9 +1197,33 @@ async function uncompleteTask(id){
    bumpChoreDraft()). Never computes overdue-days or streaks; those stay
    genuinely unknown here (a recurring chore's, from the log; a task just
    reads next_date < today, see taskRow()) until the real thing runs. */
+// due_days weekday mask (see CLAUDE.md's due_days invariant) -- only
+// "daily" honors it here, mirroring due_occurrence()/dueOccurrenceDate()/
+// evaluate() in the other three places due-ness gets computed; weekly/
+// monthly already pick a single day.
+function maskOfRec(rec){
+  if(!rec.due_days || !rec.due_days.length) return null;
+  const s = new Set(rec.due_days.map(Number).filter(n => !Number.isNaN(n)));
+  return s.size ? s : null;
+}
+function nextMaskedDayIso(startIso, mask, maxSearch=14){
+  const d = new Date(startIso + 'T00:00:00');
+  for(let i=0;i<maxSearch;i++){
+    if(mask.has(d.getDay())) return d.toISOString().slice(0,10);
+    d.setDate(d.getDate()+1);
+  }
+  return startIso;
+}
 function localDueOccurrence(rec, todayIso){
   const t = todayIso || todayISO();
-  if(rec.due_recur === 'daily') return { due_today:true, next_date:t };
+  if(rec.due_recur === 'daily'){
+    const mask = maskOfRec(rec);
+    if(!mask) return { due_today:true, next_date:t };
+    const d0 = new Date(t + 'T00:00:00');
+    if(mask.has(d0.getDay())) return { due_today:true, next_date:t };
+    d0.setDate(d0.getDate() + 1);
+    return { due_today:false, next_date: nextMaskedDayIso(d0.toISOString().slice(0,10), mask) };
+  }
   if(rec.due_recur === 'weekly'){
     const wd = (rec.due_weekday === '' || rec.due_weekday == null) ? null : Number(rec.due_weekday);
     if(wd == null || wd < 0 || wd > 6) return { due_today:false, next_date:'' };
@@ -1302,7 +1326,7 @@ async function toggleTask(id, btn){
    edit, and since editing can convert a chore between recurring and
    one-time, the existing record is pulled from whichever of the three
    arrays it's actually in. */
-function bumpChoreDraft(d, text, category){
+function bumpChoreDraft(d, text, category, dueDays){
   bump(dd => {
     dd.chores.all = dd.chores.all || [];
     dd.chores.tasks = dd.chores.tasks || [];
@@ -1319,6 +1343,7 @@ function bumpChoreDraft(d, text, category){
       due_day: d.due_recur === 'monthly' ? (parseInt(d.due_day, 10) || null) : null,
       due_weekday: d.due_recur === 'weekly' ? Number(d.due_weekday) : null,
       due_every_days: d.due_recur === 'every_n_days' ? (parseInt(d.due_every_days, 10) || 0) : 0,
+      due_days: (dueDays || []).map(Number),
       times_per_period: d.due_recur ? (parseInt(d.times_per_period, 10) || 1) : 1,
       area: d.area || '', pet: d.pet || '',
       due_time: d.due_time || '', notifications: (d.notifications||[]).map(formatNotificationToken),
@@ -1380,6 +1405,7 @@ async function saveChore(c){
     due_day: recur === 'monthly' ? c.due_day : '',
     due_weekday: recur === 'weekly' ? c.due_weekday : '',
     due_every_days: recur === 'every_n_days' ? (c.due_every_days || 1) : '',
+    due_days: (recur === 'daily' || recur === 'every_n_days') ? (c.due_days || []).map(Number) : [],
     times_per_period: recur ? (c.times_per_period || 1) : '',
     area:c.area || '', pet:c.pet || '',
     active:true, last_done:'', streak:0, done_this_period:0,
@@ -3509,6 +3535,7 @@ function sheetEditGoal(i){
     metric:g.metric||'', unit:g.unit||'', target: g.target ?? '', target_date: g.target_date||'',
     due_recur: g.due_recur || '', due_day: g.due_day != null ? String(g.due_day) : '',
     due_weekday: g.due_weekday != null ? String(g.due_weekday) : '',
+    due_days: (g.due_days || []).map(String),
     due_time: g.due_time || '', notifications: parseNotifications(g.notifications) };
   renderGoalEditSheet();
 }
@@ -3516,6 +3543,10 @@ function sheetEditGoal(i){
 function setGoalRecur(v){ GOAL_DRAFT.due_recur = v; renderGoalEditSheet(); }
 function setGoalWeekday(v){ GOAL_DRAFT.due_weekday = v; renderGoalEditSheet(); }
 function setGoalDueTime(v){ GOAL_DRAFT.due_time = v; renderGoalEditSheet(); }
+function setGoalDueDaysPreset(preset){
+  const days = preset === 'weekdays' ? ['1','2','3','4','5'] : ['0','6'];
+  document.querySelectorAll('#eg_days .chip').forEach(c => c.classList.toggle('on', days.includes(c.dataset.v)));
+}
 
 function renderGoalEditSheet(){
   const d = GOAL_DRAFT;
@@ -3545,6 +3576,16 @@ function renderGoalEditSheet(){
         value="${esc(d.due_day)}" oninput="GOAL_DRAFT.due_day=this.value">
       <p class="sub" style="margin-top:4px">Clamped to the last day of shorter months.</p>
     ` : ''}
+    ${d.due_recur === 'daily' ? `
+      <label>Limit to specific days (optional)</label>
+      <div class="chips" style="margin-bottom:8px">
+        <button type="button" class="chip" onclick="setGoalDueDaysPreset('weekdays')">Weekdays</button>
+        <button type="button" class="chip" onclick="setGoalDueDaysPreset('weekends')">Weekends</button>
+      </div>
+      ${multiChipRow('eg_days', WEEKDAYS, WEEKDAY_LABELS, d.due_days)}
+      <p class="sub" style="margin-top:4px">Leave all unchecked for every day — the streak only counts
+      checked days, so a weekends-only check-in doesn't break over a normal work week.</p>
+    ` : ''}
     ${d.due_recur ? `
       <label>Time (optional)</label>${timeSelect('eg_time', d.due_time, 'setGoalDueTime')}
       <h2 style="margin-top:22px">Notifications</h2>
@@ -3568,18 +3609,20 @@ async function submitEditGoal(btn){
   btn.disabled = true; btn.textContent = 'Saving…';
   const domain = picked('eg_domain'), status = picked('eg_status');
   const metric = val('eg_metric'), unit = val('eg_unit'), target_date = val('eg_target_date');
+  const dueDays = d.due_recur === 'daily' ? pickedMulti('eg_days') : [];
   try {
     const r = await updateGoal({path:d.path, name:d.name}, {
       domain, status, metric, unit, target_value: target, target_date,
       due_recur: d.due_recur,
       due_day: d.due_recur === 'monthly' ? val('eg_day') : '',
       due_weekday: d.due_recur === 'weekly' ? d.due_weekday : '',
+      due_days: `[${dueDays.join(', ')}]`,
       due_time: d.due_recur ? d.due_time : '',
       notifications: `[${(d.due_recur ? d.notifications : []).map(formatNotificationToken).join(', ')}]`,
     });
     bump(dd => { const x = (dd.life.goals||[]).find(y => y.path === d.path);
       if(x){ x.domain = domain; x.status = status; x.metric = metric; x.unit = unit; x.target_date = target_date;
-        x.due_recur = d.due_recur;
+        x.due_recur = d.due_recur; x.due_days = dueDays.map(Number);
         if(target){ x.target = parseFloat(target); x.percent = x.target ? +(x.current/x.target*100).toFixed(1) : null; } } });
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device' : `${d.name} updated`);
@@ -3661,7 +3704,7 @@ let CHORE_DRAFT = null;
 
 function blankChoreDraft(recur){
   return { path:'', origRecur:false, text:'', category:'home', due_recur: recur || '',
-    due_date: todayISO(), due_day:'', due_weekday:'', due_every_days:'',
+    due_date: todayISO(), due_day:'', due_weekday:'', due_every_days:'', due_days:[],
     times_per_period:'1', area:'', pet:'', due_time:'', notifications:[] };
 }
 
@@ -3683,6 +3726,7 @@ function choreToDraft(c){
     due_day: c.due_day != null ? String(c.due_day) : '',
     due_weekday: c.due_weekday != null ? String(c.due_weekday) : '',
     due_every_days: c.due_every_days ? String(c.due_every_days) : '',
+    due_days: (c.due_days || []).map(String),
     times_per_period: c.times_per_period != null ? String(c.times_per_period) : '1',
     area: c.area || '', pet: c.pet || '', due_time: c.due_time || '',
     notifications: parseNotifications(c.notifications),
@@ -3716,6 +3760,16 @@ function sheetEditDueChore(id){
 function setChoreRecur(v){ CHORE_DRAFT.due_recur = v; renderChoreSheet(); }
 function setChoreWeekday(v){ CHORE_DRAFT.due_weekday = v; renderChoreSheet(); }
 function setChoreDueTime(v){ CHORE_DRAFT.due_time = v; renderChoreSheet(); }
+// Populates the #ch_days multi-select directly (matching pick()'s own DOM-
+// only approach elsewhere) rather than re-rendering the sheet -- the guide
+// this implements is explicit that a preset is "just populate the multi-
+// select," not a separate stored value, so there's nothing to persist to
+// CHORE_DRAFT here; pickedMulti('ch_days') at save time reads whatever's
+// actually checked, preset-set or hand-picked, the same way.
+function setChoreDueDaysPreset(preset){
+  const days = preset === 'weekdays' ? ['1','2','3','4','5'] : ['0','6'];
+  document.querySelectorAll('#ch_days .chip').forEach(c => c.classList.toggle('on', days.includes(c.dataset.v)));
+}
 
 function renderChoreSheet(){
   const d = CHORE_DRAFT;
@@ -3745,6 +3799,15 @@ function renderChoreSheet(){
       <input id="ch_every" type="text" inputmode="numeric" placeholder="3"
         value="${esc(d.due_every_days)}" oninput="CHORE_DRAFT.due_every_days=this.value">
     ` : ''}
+    ${(d.due_recur === 'daily' || d.due_recur === 'every_n_days') ? `
+      <label>Limit to specific days (optional)</label>
+      <div class="chips" style="margin-bottom:8px">
+        <button type="button" class="chip" onclick="setChoreDueDaysPreset('weekdays')">Weekdays</button>
+        <button type="button" class="chip" onclick="setChoreDueDaysPreset('weekends')">Weekends</button>
+      </div>
+      ${multiChipRow('ch_days', WEEKDAYS, WEEKDAY_LABELS, d.due_days)}
+      <p class="sub" style="margin-top:4px">Leave all unchecked for every day${d.due_recur === 'every_n_days' ? ' the interval allows' : ''}.</p>
+    ` : ''}
     ${d.due_recur === '' ? `
       <label>Due date</label>
       <input id="ch_date" type="date" value="${esc(d.due_date)}" oninput="CHORE_DRAFT.due_date=this.value">
@@ -3773,7 +3836,12 @@ function renderChoreSheet(){
 // Only a one-time item's title is editable here (see choreToDraft/the
 // disabled input above) -- a recurring chore's displayed name is always
 // its filename, so text is never patched back for one.
-function choreChanges(d, category){
+// dueDays is always written wrapped in brackets, even empty ([]) -- setFm()
+// skips a bare '' value as a no-op, which would leave a stale mask in place
+// forever once you'd cleared every day chip back off; '[]' isn't empty, so
+// it patches through and parses back to no mask, same as never having set
+// one (see build_summary.py's mask_of()).
+function choreChanges(d, category, dueDays){
   const changes = {
     category,
     due_recur: d.due_recur,
@@ -3781,6 +3849,7 @@ function choreChanges(d, category){
     due_day: d.due_recur === 'monthly' ? d.due_day : '',
     due_weekday: d.due_recur === 'weekly' ? d.due_weekday : '',
     due_every_days: d.due_recur === 'every_n_days' ? d.due_every_days : '',
+    due_days: (d.due_recur === 'daily' || d.due_recur === 'every_n_days') ? `[${(dueDays||[]).join(', ')}]` : '[]',
     times_per_period: d.due_recur ? (d.times_per_period || 1) : '',
     area: d.area, pet: d.pet, due_time: d.due_time,
     notifications: `[${(d.notifications||[]).map(formatNotificationToken).join(', ')}]`,
@@ -3809,14 +3878,17 @@ async function submitChore(btn){
   // written back into CHORE_DRAFT the way a plain input's oninput does.
   // saveChore() used to read d.category directly here, which meant a new
   // chore/task always saved under whatever the draft started as (Home)
-  // no matter which chip was actually tapped.
+  // no matter which chip was actually tapped. due_days (multiChipRow) is
+  // the same DOM-only pattern -- empty when the picker isn't shown for
+  // this due_recur, which is exactly "no mask" for that case anyway.
   const category = picked('ch_cat') || 'home';
+  const dueDays = pickedMulti('ch_days');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
     const r = d.path
-      ? await updateChore({path:d.path, name:text}, choreChanges(d, category))
-      : await saveChore({...d, name: text, category});
-    bumpChoreDraft(d, text, category);
+      ? await updateChore({path:d.path, name:text}, choreChanges(d, category, dueDays))
+      : await saveChore({...d, name: text, category, due_days: dueDays});
+    bumpChoreDraft(d, text, category, dueDays);
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device — will upload when online' : (d.path ? `${text} updated` : `Added ${text}`));
     setTimeout(() => refresh(true), 1500);
