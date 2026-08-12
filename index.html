@@ -145,8 +145,6 @@ textarea{min-height:88px;resize:vertical}
 .tick{width:24px;height:24px;min-width:24px;border-radius:7px;border:1px solid var(--line);
   background:var(--panel2);font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center}
 .tick.on{background:var(--accent);color:var(--ink);border-color:var(--accent);font-weight:700}
-.sparkrow{display:flex;align-items:flex-end;gap:3px;height:44px;margin-top:10px}
-.sparkrow>i{flex:1;background:var(--accent);border-radius:2px 2px 0 0;min-height:2px;opacity:.85}
 #pull{position:fixed;top:0;left:0;right:0;height:0;overflow:hidden;z-index:40;
   display:flex;align-items:flex-end;justify-content:center;padding-top:var(--safe-top)}
 #pull .ring{width:20px;height:20px;margin-bottom:9px;border:2px solid var(--line);
@@ -2693,21 +2691,14 @@ function viewFitness(){
     <div class="stat"><div class="l">Weight</div><div class="n">${f.latest_weight ? f.latest_weight+' lb' : '—'}</div></div>
   </div>`;
   h += `<button class="btn" style="margin:12px 0" onclick="sheetWorkout()">Log a workout</button>`;
-  if(f.weekly && f.weekly.length){
-    const max = Math.max(...f.weekly.map(w=>w.sessions), 1);
-    h += `<h2>Sessions per week</h2><div class="card">
-      <div class="sparkrow">${[...f.weekly].reverse().map(w =>
-        `<i style="height:${Math.max(6,(w.sessions/max)*100)}%" title="${w.week}: ${w.sessions}"></i>`).join('')}</div>
-      <p class="sub" style="margin-top:8px">Last ${f.weekly.length} weeks · best week ${max} sessions</p></div>`;
-  }
+  const gs = (d.life.goals||[]).filter(g => g.domain==='fitness' && g.status==='active');
+  if(gs.length) h += `<h2>Fitness goals</h2>` + gs.map(g => goalCard(g)).join('');
   if(f.activities && f.activities.length){
     h += `<h2>Last 90 days</h2><div class="list">` + f.activities.map(a =>
       `<div class="item"><div><div class="m">${esc(a.activity)}</div>
        <div class="s">${a.minutes} minutes total</div></div>
        <div class="amt">${a.sessions}×</div></div>`).join('') + `</div>`;
   }
-  const gs = (d.life.goals||[]).filter(g => g.domain==='fitness' && g.status==='active');
-  if(gs.length) h += `<h2>Fitness goals</h2>` + gs.map(g => goalCard(g)).join('');
   if(f.recent && f.recent.length){
     h += `<h2>Recent sessions</h2><div class="list">` + f.recent.slice(0,20).map(w => { const i = workoutRef(w);
       return `<div class="item">
