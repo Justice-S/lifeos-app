@@ -324,7 +324,15 @@ function timeSelect(id, value, setter){
    the whole sheet from the caller's own draft state (see renderChoreSheet/
    renderGoalEditSheet) -- structural edits (add/remove/kind change) need that;
    the offset-hours text input deliberately skips it (see setNotifOffsetHrs)
-   so typing doesn't lose focus on every keystroke. */
+   so typing doesn't lose focus on every keystroke.
+   Two token kinds, two chip labels below in notifRowHtml() -- keep these
+   matched to what each one actually fires relative to, they were swapped
+   once already and it read as "the at-time-of-day option is broken, only
+   event-based ones exist": 'offset' fires N minutes before the object's
+   own due_time, i.e. genuinely "at a time of day" -- gated behind
+   allowOffset since it needs a due_time to be relative to. 'anchor' fires
+   relative to wake/sleep/work_start/work_end regardless of due_time, i.e.
+   "relative to an event," always available. */
 let NOTIF_EDITOR = null;
 function notifRowsHtml(){
   const e = NOTIF_EDITOR;
@@ -342,11 +350,13 @@ function notifRowHtml(n, i){
     <div class="row">
       <button type="button" class="tick ${n.enabled?'on':''}" onclick="toggleNotif(${i})" aria-label="enabled">${n.enabled?'✓':''}</button>
       <div class="chips" style="flex:1;margin-left:8px">
-        ${e.allowOffset ? `<button type="button" class="chip ${isOffset?'on':''}" onclick="setNotifKind(${i},'offset')">Before due</button>` : ''}
-        <button type="button" class="chip ${!isOffset?'on':''}" onclick="setNotifKind(${i},'anchor')">At a time of day</button>
+        ${e.allowOffset ? `<button type="button" class="chip ${isOffset?'on':''}" onclick="setNotifKind(${i},'offset')">At a time of day</button>` : ''}
+        <button type="button" class="chip ${!isOffset?'on':''}" onclick="setNotifKind(${i},'anchor')">Relative to an event</button>
       </div>
       <button type="button" class="btn sec" style="width:auto;padding:6px 10px;margin-left:8px" onclick="removeNotif(${i})">✕</button>
     </div>
+    ${!e.allowOffset ? `<p class="sub" style="margin-top:6px">Set a time above to also unlock "At a time of day"
+      — it fires a fixed number of minutes before that.</p>` : ''}
     ${isOffset ? `
       <label style="margin-top:8px">Hours before due</label>
       <input type="text" inputmode="decimal" placeholder="e.g. 0.5" value="${n.minutes!=null ? n.minutes/60 : ''}"
