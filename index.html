@@ -446,6 +446,20 @@ const b64 = str => { const b=new TextEncoder().encode(str); let s=''; b.forEach(
 const unb64 = s => new TextDecoder().decode(Uint8Array.from(atob(String(s).replace(/\s/g,'')), c=>c.charCodeAt(0)));
 const safeName = s => String(s||'').replace(/[\\/:*?"<>|#^\[\]]/g,'').replace(/\s+/g,' ').trim().slice(0,60) || 'Entry';
 
+/* Obsidian tag syntax: letters/numbers/hyphen/underscore/forward-slash for
+   nesting, no spaces. Used to fold a note's own descriptive fields (a
+   transaction's category, a chore's category, a workout's activity, ...)
+   into extra frontmatter tags -- alongside the type-level tags every note
+   already carried -- purely so Obsidian's own tag pane/search can browse
+   by them without opening a dashboard. Decorative only: nothing here or
+   in build_summary.py/update_chores.py/send.js ever reads a tags value
+   back (see CLAUDE.md's Obsidian-legibility note), so this is safe to
+   extend freely -- update_chores.py's one dependency on this field is the
+   literal `\ntags:` line existing at all, as an anchor to insert computed
+   fields before (see its set_field()), which adding entries to the array
+   doesn't disturb. */
+const tagSlug = s => String(s||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+
 let toastTimer;
 function toast(msg, ms=2600){
   const t = $('#toast'); t.textContent = msg; t.classList.add('on');
@@ -666,10 +680,13 @@ function fm(obj){
 }
 
 function transactionNote(t){
+  const tags = ['finance','transaction'];
+  if(t.category) tags.push(`finance/category-${tagSlug(t.category)}`);
+  if(t.account) tags.push(`finance/account-${tagSlug(t.account)}`);
   const body = fm({
     type:'transaction', date:t.date, amount:Number(t.amount).toFixed(2), direction:t.direction,
     merchant:t.merchant, category:t.category, account:t.account, method:t.method||'',
-    source:'phone', external_id:`phone:${t.date}:${t.merchant}:${t.amount}`, tags:['finance','transaction']
+    source:'phone', external_id:`phone:${t.date}:${t.merchant}:${t.amount}`, tags
   });
   const verb = t.direction === 'expense' ? 'spent' : 'received';
   return body + `
@@ -688,10 +705,12 @@ ${t.note || ''}
 }
 
 function workoutNote(w){
+  const tags = ['fitness','workout'];
+  if(w.activity) tags.push(`fitness/activity-${tagSlug(w.activity)}`);
   const body = fm({
     type:'workout', date:w.date, activity:w.activity, duration_min:w.duration_min,
     intensity:w.intensity, distance_mi:w.distance_mi||'', calories:'', avg_hr:'',
-    soreness:'', tags:['fitness','workout']
+    soreness:'', tags
   });
   return body + `
 # ${w.activity} — ${w.duration_min} min
@@ -712,7 +731,7 @@ function metricNote(m){
     type:'metric', date:m.date, weight_lbs:m.weight_lbs||'', body_fat_pct:m.body_fat_pct||'',
     resting_hr:m.resting_hr||'', waist_in:m.waist_in||'', sleep_hours:'', tags:['fitness','metric']
   });
-  return body + `\n# Body metrics — ${m.date}\n\nLogged from phone.\n`;
+  return body + `\n# Body metrics — ${m.date}\n\nLogged from phone. Day: [[10 Daily/${m.date}|${m.date}]]\n`;
 }
 
 const DAILY_TEMPLATE = d => fm({
@@ -1336,6 +1355,14 @@ async function saveChore(c){
   if(!filename) throw new Error('Needs a name');
   const path = vpath(`50 Chores/Definitions/${filename}.md`);
   const recur = ['daily','weekly','monthly','every_n_days'].includes(c.due_recur) ? c.due_recur : '';
+  // The category tag below is stamped once, at creation, not kept in sync
+  // by updateChore() if the category later changes -- updateChore() patches
+  // one flat key at a time (see its own comment) and re-deriving this from
+  // a fresh tags array would mean blindly overwriting the whole field,
+  // destroying any tags you'd added by hand in Obsidian in the meantime.
+  // Same tradeoff as a recurring chore's streak/last_done going briefly
+  // stale until the next real rebuild (CLAUDE.md #11) -- acceptable
+  // because it's decorative, not something anything reads back.
   const body = fm({
     type:'chore', category:c.category || 'home', text:c.name,
     due_recur:recur,
@@ -1350,7 +1377,7 @@ async function saveChore(c){
     due_time: c.due_time || '',
     notifications: (c.notifications || []).map(formatNotificationToken),
     done:false, done_date:'',
-    tags:['chore']
+    tags:['chore', `chore/${tagSlug(c.category || 'home')}`]
   }) + `\n# ${filename}\n\nAdded from the phone on ${todayISO()}.\n`;
   return write(path, body, `Add chore: ${filename}`, { mode:'update' });
 }
@@ -1405,7 +1432,11 @@ async function updateTransaction(t, changes){
 
 async function saveAchievement(a){
   const path = vpath(`40 Life/Achievements/${a.date} ${safeName(a.title)}.md`);
-  const body = fm({ type:'achievement', date:a.date, domain:a.domain, tags:['achievement'] })
+  // Domain tag stamped once at creation, same tradeoff as saveChore()'s
+  // category tag above -- updateAchievement() can change domain later
+  // without re-deriving this, to avoid clobbering any tags added by hand.
+  const body = fm({ type:'achievement', date:a.date, domain:a.domain,
+      tags:['achievement', `achievement/${tagSlug(a.domain)}`] })
     + `\n# ${a.title}\n\n${a.note || ''}\n\nLogged on [[10 Daily/${a.date}|${a.date}]].\n`;
   return write(path, body, `Achievement: ${a.title}`);
 }
@@ -1450,7 +1481,8 @@ async function saveExemption(e){
   const body = fm({ type:'exemption', kind:e.kind, start_date:e.start_date, end_date:e.end_date,
     chores: e.chores || [], notifications: e.notifications || [],
     schedule: e.schedule || '', suppress: e.suppress === false ? false : true,
-    note: e.note || '', tags:['exemption'] }) + `\n# ${label}\n\nAdded from the phone on ${todayISO()}.\n`;
+    note: e.note || '', tags:['exemption', `exemption/${tagSlug(e.kind)}`] })
+    + `\n# ${label}\n\nAdded from the phone on ${todayISO()}.\n`;
   return write(path, body, `Exemption: ${label}`, { mode:'update' });
 }
 
