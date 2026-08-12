@@ -168,6 +168,13 @@ textarea{min-height:88px;resize:vertical}
 .cal-cell.h3{background:color-mix(in srgb, var(--accent) 70%, var(--panel2));color:var(--ink)}
 .cal-cell.h4{background:var(--accent);color:var(--ink);font-weight:700}
 .cal-cell.exempt{opacity:.4}
+/* A small dot, not a fill -- the heat classes above already own "how much
+   happened here," so a due-but-not-done cue reuses the existing "needs a
+   response" red (.bad/.dot.err elsewhere) as a corner marker instead of
+   competing for the cell's own background. Today/future only -- see
+   computeDayDetail()'s own note on why a past date never gets one. */
+.cal-cell.due-cue::after{content:'';position:absolute;top:3px;right:3px;width:7px;height:7px;
+  border-radius:50%;background:var(--bad);box-shadow:0 0 0 1.5px var(--panel2)}
 .cal-week-strip{display:flex;gap:6px;margin-top:8px}
 .cal-week-strip .cal-cell{flex:1;aspect-ratio:auto;height:58px;flex-direction:column;gap:3px}
 .streak-row{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;margin-top:6px;-webkit-overflow-scrolling:touch}
@@ -2044,6 +2051,114 @@ function calDayMap(d){
 }
 function isoOf(y, mo, day){ return `${y}-${String(mo+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`; }
 
+/* Every exemption covering iso, by plain string range comparison (ISO
+   dates sort lexically) -- not window-bound the way calendar.days[].exempt
+   is, so this works for a future date too (a holiday marked in advance
+   previously never lit up its own cell -- see this phase's grid-defect
+   note in CLAUDE.md). suppress:false ("schedule only") exemptions are
+   filtered out here, not just in isBlanketExemption -- they don't
+   suppress anything, so they should never affect what shows as due either. */
+function exemptionsOnDate(iso, exemptions){
+  return (exemptions || []).filter(e => e.suppress !== false && e.start_date <= iso && iso <= e.end_date);
+}
+// Empty chores AND notifications scope is this app's existing convention
+// for "covers everything" (see exemptionScopeLabel) -- reused here rather
+// than re-deriving it a second way.
+function isBlanketExemption(e){ return !(e.chores||[]).length && !(e.notifications||[]).length; }
+
+/* What's due on ANY date -- past, today, or future -- computed entirely
+   from data the payload already has (DATA.chores.all/tasks/tasks_done,
+   DATA.life.goals/achievements, DATA.exemptions), reusing the same
+   mask-aware localDueOccurrence() the today-only optimistic-update path
+   already relies on. Not server-precomputed, and build_summary.py's
+   120-day cal_days window is deliberately NOT widened for this -- see
+   CLAUDE.md's day-detail invariant.
+
+   Two things this deliberately can't determine, called out explicitly
+   rather than guessed at:
+   - An every_n_days chore's due-ness depends on its completion LOG, not
+     just its recurrence rule -- the payload never ships that beyond
+     today's already-computed due/next_due (update_chores.py's evaluate()
+     is the only thing that reads the log). Included for today (server
+     truth); skipped for every other date.
+   - A recurring chore's per-item done-state on a PAST date isn't
+     available either -- calendar.days[].chores is an aggregate count
+     (read_chore_log_by_day() in build_summary.py), not a list of which
+     chores. done stays null (unknown) there, distinct from false (known
+     not done, today only) and true (known done). Tasks don't have this
+     problem -- done_date is a real per-item field for any date. Goal
+     check-ins fall in between: accurate for a past date INSIDE the
+     existing 120-day window (calendar.days[].goal_checkins already
+     cross-references each goal's progress log server-side), null outside
+     it or in the future -- same "just due, no done-state yet" the guide
+     asks for future dates generally. */
+function computeDayDetail(iso){
+  const d = DATA;
+  const today = todayISO();
+  const isToday = iso === today;
+  const future = iso > today;
+
+  const exOnDate = exemptionsOnDate(iso, d.exemptions || []);
+  const blanket = exOnDate.some(isBlanketExemption);
+  const exemptNames = new Set(exOnDate.flatMap(e => e.chores || []));
+
+  const chores = [], tasks = [], goalCheckins = [], milestones = [];
+
+  if(!blanket){
+    (d.chores.all || []).forEach(c => {
+      if(exemptNames.has(c.name)) return;
+      let due, done = null;
+      if(c.due_recur === 'every_n_days'){
+        if(!isToday) return;
+        due = !!c.due; done = false; // on the list only while still due
+      } else {
+        due = localDueOccurrence(c, iso).due_today;
+        if(due && isToday) done = !c.due;
+      }
+      if(due) chores.push({ name: c.name, category: c.category, done });
+    });
+
+    [...(d.chores.tasks || []), ...(d.chores.tasks_done || [])].forEach(t => {
+      const name = t.text || t.name;
+      if(t.due_date !== iso || exemptNames.has(name)) return;
+      tasks.push({ name, category: t.category, done: t.done_date === iso });
+    });
+
+    const dayRec = calDayMap(d)[iso];
+    (d.life.goals || []).forEach(g => {
+      if(g.status !== 'active' || !g.due_recur || exemptNames.has(g.name)) return;
+      if(!localDueOccurrence(g, iso).due_today) return;
+      let done = null;
+      if(!future){
+        const match = dayRec && (dayRec.goal_checkins || []).find(c => c.name === g.name);
+        if(match) done = match.done;
+      }
+      goalCheckins.push({ name: g.name, domain: g.domain, done });
+    });
+  }
+
+  (d.life.goals || []).forEach(g => {
+    if(g.status === 'active' && g.target_date === iso) milestones.push({ kind:'goal', name: g.name, domain: g.domain });
+  });
+  (d.life.achievements || []).forEach(a => {
+    if(a.date === iso) milestones.push({ kind:'achievement', name: a.name, domain: a.domain });
+  });
+
+  return { iso, today, isToday, future, blanket, exemptions: exOnDate, chores, tasks, goalCheckins, milestones };
+}
+
+// The calendar cell's own due-cue: today or future only (see
+// computeDayDetail()'s docstring on why a past date's unknowns -- null --
+// would otherwise light up nearly every past cell for a daily chore).
+// done === true is satisfied; false or null both still count as "hasn't
+// happened yet," including a future item nothing's been logged for.
+function hasActionableDue(iso){
+  if(iso < todayISO()) return false;
+  const det = computeDayDetail(iso);
+  return det.chores.some(c => c.done !== true) || det.tasks.some(t => !t.done)
+    || det.goalCheckins.some(g => g.done !== true);
+}
+
 function viewCalendar(){
   const d = DATA;
   const activeStreaks = d ? (d.calendar.goal_streaks||[]).filter(g => g.streak > 0) : [];
@@ -2106,7 +2221,9 @@ function renderCalMonth(d){
     const iso = isoOf(year, month, day);
     const rec = map[iso];
     const score = rec ? activityScore(rec) : 0;
-    const cls = ['cal-cell', heatClass(score), iso===today?'today':'', rec&&rec.exempt?'exempt':'']
+    const exempt = exemptionsOnDate(iso, d.exemptions).length > 0;
+    const cls = ['cal-cell', heatClass(score), iso===today?'today':'', exempt?'exempt':'',
+      !exempt && hasActionableDue(iso) ? 'due-cue' : '']
       .filter(Boolean).join(' ');
     cells += `<button class="${cls}" onclick="sheetDayDetail('${iso}')">${day}</button>`;
   }
@@ -2136,7 +2253,9 @@ function renderCalWeek(d){
     const iso = isoOf(dt.getFullYear(), dt.getMonth(), dt.getDate());
     const rec = map[iso];
     const score = rec ? activityScore(rec) : 0;
-    const cls = ['cal-cell', heatClass(score), iso===todayIso?'today':'', rec&&rec.exempt?'exempt':'']
+    const exempt = exemptionsOnDate(iso, d.exemptions).length > 0;
+    const cls = ['cal-cell', heatClass(score), iso===todayIso?'today':'', exempt?'exempt':'',
+      !exempt && hasActionableDue(iso) ? 'due-cue' : '']
       .filter(Boolean).join(' ');
     cells += `<button class="${cls}" onclick="sheetDayDetail('${iso}')">
       <span style="font-size:9px;opacity:.8">${labels[i]}</span><span>${dt.getDate()}</span>
@@ -2152,33 +2271,73 @@ function renderCalWeek(d){
     <div class="cal-week-strip">${cells}</div>`;
 }
 
+// done:true -> "✓ Name" (satisfied); done:false -> dimmed "○ Name" (known,
+// not done -- only ever true for today's chores/tasks and a past date's
+// goal check-ins inside the 120-day window, see computeDayDetail());
+// done:null -> the plain name, no mark -- "just due, no done-state to
+// show yet" for anything else (a future item, an every_n_days chore on
+// any day but today, a recurring chore on a past day -- see the same
+// docstring for exactly why each of those is unknowable here).
+function dueItemRow(name, sub, done){
+  const mark = done === true ? '✓ ' : done === false ? '○ ' : '';
+  const style = done === false ? 'color:var(--dim)' : '';
+  return `<div class="item"><div class="m" style="${style}">${mark}${esc(name)}</div>
+    ${sub ? `<div class="s">${esc(sub)}</div>` : ''}</div>`;
+}
+
 function sheetDayDetail(iso){
   const d = DATA;
-  const rec = ((d && d.calendar.days) || []).find(x => x.date === iso)
-    || {date: iso, chores:0, workout:false, checkin:false, goal_progress:0, goal_checkins:[], exempt:false};
+  // The look-back activity stats (chores done count, workout, check-in)
+  // only exist inside build_summary.py's 120-day cal_days window -- rec
+  // is simply absent outside it (a future date, or one older than the
+  // window), and the stats block below is skipped rather than showing
+  // zeroes that would misleadingly read as "confirmed nothing happened."
+  const rec = ((d && d.calendar.days) || []).find(x => x.date === iso);
   const label = new Date(iso + 'T12:00:00').toLocaleDateString('en-US',
     {weekday:'long', month:'long', day:'numeric'});
-  // goal_checkins is due-vs-done for that day's expected goal check-ins
-  // (build_summary.py's due_occurrence() cross-referenced against the
-  // goal's own progress-log dates) -- the one place this calendar can
-  // actually show "due" for a past day; a chore's due-ness is a today-only
-  // concept (see CLAUDE.md #16/#21), so chores only ever show a done count.
-  const checkins = rec.goal_checkins || [];
-  openSheet(`<h1 style="font-size:22px">${esc(label)}</h1>
-    ${rec.exempt ? `<p class="sub">Exempt — chores and reminders are off this day.</p>` : ''}
-    <div class="grid" style="margin-top:14px">
+  const det = computeDayDetail(iso);
+
+  let h = `<h1 style="font-size:22px">${esc(label)}</h1>`;
+  if(det.blanket){
+    h += `<p class="sub">Exempt — chores and reminders are off this day.</p>`;
+  } else if(det.exemptions.length){
+    h += `<p class="sub">${det.exemptions.length === 1 ? 'An exemption narrows' : `${det.exemptions.length} exemptions narrow`}
+      what's due this day — see the Exemptions list below for details.</p>`;
+  }
+
+  if(rec){
+    h += `<div class="grid" style="margin-top:14px">
       <div class="stat"><div class="l">Chores done</div><div class="n">${rec.chores}</div></div>
       <div class="stat"><div class="l">Goal updates</div><div class="n">${rec.goal_progress}</div></div>
       <div class="stat"><div class="l">Workout</div><div class="n">${rec.workout ? '✓' : '—'}</div></div>
       <div class="stat"><div class="l">Check-in</div><div class="n">${rec.checkin ? '✓' : '—'}</div></div>
-    </div>
-    ${checkins.length ? `<h2 style="margin-top:18px">Goal check-ins</h2>
-      <div class="list">` + checkins.map(c => `<div class="item">
-        <div class="m" style="${c.done?'':'color:var(--dim)'}">${c.done?'✓':'○'} ${esc(c.name)}</div>
-      </div>`).join('') + `</div>` : ''}
-    ${rec.exempt ? '' : `<button class="btn sec" style="margin-top:18px"
-      onclick="sheetAddExemption('${iso}')">Mark as exempt</button>`}
-    <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Close</button>`);
+    </div>`;
+  }
+
+  if(!det.blanket){
+    const dueItems = [
+      ...det.chores.map(c => dueItemRow(c.name, CHORE_CATEGORY_LABELS[c.category] || c.category, c.done)),
+      ...det.tasks.map(t => dueItemRow(t.name, CHORE_CATEGORY_LABELS[t.category] || t.category, t.done)),
+      ...det.goalCheckins.map(g => dueItemRow(g.name, g.domain, g.done)),
+    ];
+    if(dueItems.length){
+      h += `<h2 style="margin-top:18px">Due</h2><div class="list">${dueItems.join('')}</div>`;
+    } else if(!rec){
+      h += `<p class="sub" style="margin-top:14px">Nothing due this day.</p>`;
+    }
+  }
+
+  if(det.milestones.length){
+    h += `<h2 style="margin-top:18px">Milestones</h2><div class="list">` + det.milestones.map(m =>
+      `<div class="item"><div class="m">${m.kind==='achievement'?'🏆':'🎯'} ${esc(m.name)}</div>
+        <div class="s">${esc(m.domain)} · ${m.kind==='achievement'?'Achievement':'Goal deadline'}</div></div>`
+    ).join('') + `</div>`;
+  }
+
+  h += det.blanket ? '' : `<button class="btn sec" style="margin-top:18px"
+      onclick="sheetAddExemption('${iso}')">Mark as exempt</button>`;
+  h += `<button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Close</button>`;
+  openSheet(h);
 }
 
 const REMINDERS_PATH = '90 System/push/reminders.json';
