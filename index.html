@@ -189,8 +189,14 @@ textarea{min-height:88px;resize:vertical}
 .collapse-head .t2{font-size:12px;color:var(--dim);margin-left:8px;text-transform:none;letter-spacing:0;font-weight:400}
 .collapse-head .chev{color:var(--dim);font-size:11px;transition:transform .15s;display:inline-block}
 .collapse.open>.collapse-head .chev{transform:rotate(90deg)}
-.collapse-body{display:none}
-.collapse.open>.collapse-body{display:block}
+/* max-height, not display:none -- a collapsed section stays in the DOM and
+   the accessibility tree, only visually clipped, so find-in-page and a
+   screen reader's "read everything" mode still reach it (Phase 4's
+   legibility-pass requirement: collapsed means visually hidden, never
+   removed). Every collapsible() instance across the app inherits this from
+   one shared rule rather than each getting its own hide mechanism. */
+.collapse-body{max-height:0;overflow:hidden}
+.collapse.open>.collapse-body{max-height:none;overflow:visible}
 .filter-bar{margin-bottom:14px}
 .filter-bar label{margin:10px 0 6px}
 .filter-bar label:first-child{margin-top:0}
@@ -2186,9 +2192,14 @@ function viewCalendar(){
 
   h += CAL_MODE === 'month' ? renderCalMonth(d) : renderCalWeek(d);
 
+  // Collapsed by default -- a list of holidays/days off/events is exactly
+  // the "secondary detail, more than one screen once it grows" case #17's
+  // Phase 4 legibility pass targets. forceOpen when one covers today,
+  // though: that's the "exemption already in effect today" case the same
+  // pass explicitly says must never start hidden behind a tap.
   const ex = d.exemptions || [];
-  h += `<h2>Exemptions${ex.length ? '' : ' — none set'}</h2>`;
-  h += ex.length
+  const exemptToday = exemptionsOnDate(todayISO(), ex).length > 0;
+  const exBody = ex.length
     ? `<div class="list">` + ex.map((e, i) => `<div class="item">
         <button style="min-width:0;flex:1;text-align:left;background:none;border:none;padding:0"
           onclick="sheetEditExemption(${i})">
@@ -2200,6 +2211,8 @@ function viewCalendar(){
       </div>`).join('') + `</div>`
     : `<div class="card"><span class="sub">No holidays, days off, or events set — chores and
         reminders run normally every day.</span></div>`;
+  h += collapsible('cal_exemptions', `Exemptions${ex.length ? '' : ' — none set'}`, exBody,
+    { forceOpen: exemptToday, subtitle: exemptToday ? 'In effect today' : '' });
   return h;
 }
 
@@ -2271,6 +2284,14 @@ function renderCalWeek(d){
     <div class="cal-week-strip">${cells}</div>`;
 }
 
+// Re-renders the day-detail sheet in place after toggling its "What
+// happened" collapsible -- see collapsible()'s onToggle comment for why
+// this can't just be toggleSection() directly.
+function toggleDayDetailHistory(iso){
+  toggleSection('daydetail_history');
+  sheetDayDetail(iso);
+}
+
 // done:true -> "✓ Name" (satisfied); done:false -> dimmed "○ Name" (known,
 // not done -- only ever true for today's chores/tasks and a past date's
 // goal check-ins inside the 120-day window, see computeDayDetail());
@@ -2305,15 +2326,14 @@ function sheetDayDetail(iso){
       what's due this day — see the Exemptions list below for details.</p>`;
   }
 
-  if(rec){
-    h += `<div class="grid" style="margin-top:14px">
+  const statsHtml = rec ? `<div class="grid" style="margin-top:14px">
       <div class="stat"><div class="l">Chores done</div><div class="n">${rec.chores}</div></div>
       <div class="stat"><div class="l">Goal updates</div><div class="n">${rec.goal_progress}</div></div>
       <div class="stat"><div class="l">Workout</div><div class="n">${rec.workout ? '✓' : '—'}</div></div>
       <div class="stat"><div class="l">Check-in</div><div class="n">${rec.checkin ? '✓' : '—'}</div></div>
-    </div>`;
-  }
+    </div>` : '';
 
+  let dueHtml = '';
   if(!det.blanket){
     const dueItems = [
       ...det.chores.map(c => dueItemRow(c.name, CHORE_CATEGORY_LABELS[c.category] || c.category, c.done)),
@@ -2321,10 +2341,22 @@ function sheetDayDetail(iso){
       ...det.goalCheckins.map(g => dueItemRow(g.name, g.domain, g.done)),
     ];
     if(dueItems.length){
-      h += `<h2 style="margin-top:18px">Due</h2><div class="list">${dueItems.join('')}</div>`;
+      dueHtml = `<h2 style="margin-top:18px">Due</h2><div class="list">${dueItems.join('')}</div>`;
     } else if(!rec){
-      h += `<p class="sub" style="margin-top:14px">Nothing due this day.</p>`;
+      dueHtml = `<p class="sub" style="margin-top:14px">Nothing due this day.</p>`;
     }
+  }
+
+  // A past date's activity/due detail is a look-back, not something to act
+  // on -- nothing here can still be done today, so it collapses by default
+  // (Phase 4's legibility pass). Today and future stay expanded: a due-
+  // today item and a forward-looking preview are exactly the "needs a
+  // response" cases that must never start hidden behind a tap.
+  if(det.future || det.isToday){
+    h += statsHtml + dueHtml;
+  } else if(statsHtml || dueHtml){
+    h += collapsible('daydetail_history', 'What happened', statsHtml + dueHtml,
+      { onToggle: `toggleDayDetailHistory('${iso}')` });
   }
 
   if(det.milestones.length){
@@ -3606,8 +3638,16 @@ function collapsible(key, title, bodyHtml, opts={}){
   // is still there once whatever forced it open (a filter) goes away.
   const open = OPEN_SECTIONS.has(key) || !!opts.forceOpen;
   const sub = opts.subtitle ? `<span class="t2">${esc(opts.subtitle)}</span>` : '';
+  // Every existing call site lives inside a tab view, where toggleSection()'s
+  // own render() correctly redraws it -- but a collapsible rendered INSIDE
+  // an open sheet (openSheet() writes to #sheetBody, a separate subtree
+  // render() never touches) needs its own re-render trigger instead, same
+  // as every other in-sheet state change in this file (setChoreRecur ->
+  // renderChoreSheet(), not render()). onToggle overrides the default
+  // toggleSection() onclick for exactly that case.
+  const onclick = opts.onToggle || `toggleSection('${key}')`;
   return `<div class="collapse ${open?'open':''}">
-    <button class="collapse-head" onclick="toggleSection('${key}')">
+    <button class="collapse-head" onclick="${onclick}" aria-expanded="${open}">
       <span><span class="t">${esc(title)}</span>${sub}</span>
       <span class="chev">▸</span>
     </button>
