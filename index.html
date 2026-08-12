@@ -1326,7 +1326,7 @@ async function toggleTask(id, btn){
    edit, and since editing can convert a chore between recurring and
    one-time, the existing record is pulled from whichever of the three
    arrays it's actually in. */
-function bumpChoreDraft(d, text, category, dueDays){
+function bumpChoreDraft(d, text, category, dueDays, custom){
   bump(dd => {
     dd.chores.all = dd.chores.all || [];
     dd.chores.tasks = dd.chores.tasks || [];
@@ -1347,6 +1347,11 @@ function bumpChoreDraft(d, text, category, dueDays){
       times_per_period: d.due_recur ? (parseInt(d.times_per_period, 10) || 1) : 1,
       area: d.area || '', pet: d.pet || '',
       due_time: d.due_time || '', notifications: (d.notifications||[]).map(formatNotificationToken),
+      // '' (never touched) and '""' (setFm()'s clear-a-set-field sentinel,
+      // see readCustomFieldValues) both mean "not present" here, matching
+      // build_summary.py's custom_of() -- the real rebuild is what's
+      // authoritative, this is just the optimistic local guess until then.
+      custom: Object.fromEntries(Object.entries(custom || {}).filter(([, v]) => v !== '' && v !== '""')),
       path,
     };
     if(d.due_recur){
@@ -1413,7 +1418,8 @@ async function saveChore(c){
     due_time: c.due_time || '',
     notifications: (c.notifications || []).map(formatNotificationToken),
     done:false, done_date:'',
-    tags:['chore', `chore/${tagSlug(c.category || 'home')}`]
+    tags:['chore', `chore/${tagSlug(c.category || 'home')}`],
+    ...(c.custom || {}),
   }) + `\n# ${filename}\n\nAdded from the phone on ${todayISO()}.\n`;
   return write(path, body, `Add chore: ${filename}`, { mode:'update' });
 }
@@ -1472,7 +1478,7 @@ async function saveAchievement(a){
   // category tag above -- updateAchievement() can change domain later
   // without re-deriving this, to avoid clobbering any tags added by hand.
   const body = fm({ type:'achievement', date:a.date, domain:a.domain,
-      tags:['achievement', `achievement/${tagSlug(a.domain)}`] })
+      tags:['achievement', `achievement/${tagSlug(a.domain)}`], ...(a.custom || {}) })
     + `\n# ${a.title}\n\n${a.note || ''}\n\nLogged on [[10 Daily/${a.date}|${a.date}]].\n`;
   return write(path, body, `Achievement: ${a.title}`);
 }
@@ -2224,6 +2230,227 @@ function ensureActionsUsage(){
   })();
 }
 
+/* ---- Settings → Custom fields: user-defined fields, no code change ---- */
+// A field definition (key/label/type/options) per note type, config-driven
+// rather than a schema change (CLAUDE.md's custom_fields invariant) --
+// Settings adds/edits/removes entries here; every relevant edit sheet
+// renders one input per defined field for its type, after the built-in
+// fields; build_summary.py copies whichever declared keys are present on
+// a note into a generic custom:{} object. Nothing downstream needs new
+// code when a field is added or removed, only this file's own content.
+
+const CUSTOM_FIELDS_PATH = '90 System/config/custom_fields.json';
+// "task" isn't a separate bucket -- a task is a type:chore note with
+// due_recur blank (CLAUDE.md #25), the exact same frontmatter shape as a
+// recurring chore and the same renderChoreSheet()/choreChanges() code
+// path, so a field defined under "chore" already reaches both. There's
+// nothing on disk a separate "task" key could distinguish.
+const CUSTOM_FIELD_TYPES = ['chore', 'goal', 'transaction', 'achievement'];
+const CUSTOM_FIELD_TYPE_LABELS = { chore:'Chores & tasks', goal:'Goals', transaction:'Transactions', achievement:'Achievements' };
+const CUSTOM_FIELD_INPUT_TYPES = ['text', 'number', 'toggle', 'date', 'select'];
+const CUSTOM_FIELD_INPUT_LABELS = { text:'Text', number:'Number', toggle:'Yes/No', date:'Date', select:'Choice list' };
+
+// Frontmatter keys every built-in edit sheet already owns for that type --
+// a custom field can never claim one of these, or saving it would silently
+// clobber a real field the next time updateX()'s setFm() loop patches it.
+const CUSTOM_FIELD_RESERVED = {
+  chore: ['type','category','text','due_recur','due_date','due_day','due_weekday','due_every_days',
+    'due_days','times_per_period','area','pet','active','last_done','streak','done_this_period',
+    'due','overdue_days','next_due','due_time','notifications','done','done_date','tags'],
+  goal: ['type','domain','status','started','target_date','metric','start_value','current_value',
+    'target_value','unit','due_recur','due_day','due_weekday','due_days','due_time','notifications','tags'],
+  transaction: ['type','date','amount','direction','merchant','category','account','method','source',
+    'external_id','tags','exempt'],
+  achievement: ['type','date','domain','tags'],
+};
+
+function defaultCustomFields(){ const o = {}; CUSTOM_FIELD_TYPES.forEach(t => o[t] = []); return o; }
+
+async function loadCustomFields(){
+  try {
+    const f = await getFile(vpath(CUSTOM_FIELDS_PATH));
+    if(f){ const c = JSON.parse(f.text); return { ...defaultCustomFields(), ...c }; }
+  } catch(e){ /* offline, unconfigured, or file doesn't exist yet */ }
+  return defaultCustomFields();
+}
+
+async function saveCustomFields(cf){
+  return write(vpath(CUSTOM_FIELDS_PATH), JSON.stringify(cf, null, 2) + '\n',
+    'Update custom field definitions', { mode:'update' });
+}
+
+let CUSTOM_FIELDS = null, customFieldsPromise = null;
+
+// Resolves once CUSTOM_FIELDS is populated. Every edit-sheet entry point
+// below awaits this before its first render -- render() only ever touches
+// #app, never an already-open #sheetBody, so a background reload landing
+// after a sheet is already on screen couldn't patch custom fields into it;
+// awaiting here means the very first sheet opened after a cold load still
+// shows them instead of racing the fetch.
+function loadCustomFieldsIfNeeded(){
+  if(CUSTOM_FIELDS) return Promise.resolve(CUSTOM_FIELDS);
+  if(!customFieldsPromise) customFieldsPromise = loadCustomFields().then(cf => { CUSTOM_FIELDS = cf; customFieldsPromise = null; return cf; });
+  return customFieldsPromise;
+}
+// Settings' own lazy-load-then-render trigger, same pattern as ensureReminderConfig.
+function ensureCustomFields(){ if(!CUSTOM_FIELDS) loadCustomFieldsIfNeeded().then(() => render()); }
+
+function customFieldKeyError(type, key, excludeIdx){
+  if(!key) return 'Key is required';
+  if(!/^[a-z][a-z0-9_]*$/.test(key)) return 'Lowercase letters, numbers, and underscores only, starting with a letter';
+  if((CUSTOM_FIELD_RESERVED[type] || []).includes(key)) return `"${key}" is already a built-in field`;
+  const existing = (CUSTOM_FIELDS[type] || []);
+  if(existing.some((f, i) => f.key === key && i !== excludeIdx)) return `"${key}" is already defined`;
+  return '';
+}
+
+/* One input per defined field for `type`, after the built-in fields on
+   whatever sheet calls this -- `values` is the note's existing custom:{}
+   object (or {} for a new note), idPrefix keeps element ids unique per
+   sheet (e.g. 'ch' for the chore sheet, 'eg' for the goal edit sheet). */
+function renderCustomFieldInputs(type, values, idPrefix){
+  const defs = (CUSTOM_FIELDS && CUSTOM_FIELDS[type]) || [];
+  if(!defs.length) return '';
+  const v = values || {};
+  return `<h2 style="margin-top:22px">Custom fields</h2>` + defs.map(f => {
+    const id = `${idPrefix}_cf_${f.key}`;
+    const cur = v[f.key];
+    if(f.type === 'toggle'){
+      const on = cur === true || cur === 'true';
+      return `<div class="row" style="margin-top:10px">
+        <b>${esc(f.label || f.key)}</b>
+        <button class="tick ${on?'on':''}" style="width:44px;height:28px;border-radius:14px;flex-shrink:0"
+          onclick="toggleOnOffBtn(this)" id="${id}">${on?'On':'Off'}</button>
+      </div>`;
+    }
+    if(f.type === 'select'){
+      return `<label>${esc(f.label || f.key)}</label>${chipRow(id, f.options || [], cur != null ? String(cur) : '')}`;
+    }
+    if(f.type === 'date'){
+      return `<label>${esc(f.label || f.key)}</label><input id="${id}" type="date" value="${esc(cur || '')}">`;
+    }
+    if(f.type === 'number'){
+      return `<label>${esc(f.label || f.key)}</label><input id="${id}" type="text" inputmode="decimal" value="${esc(cur != null ? cur : '')}">`;
+    }
+    return `<label>${esc(f.label || f.key)}</label><input id="${id}" value="${esc(cur != null ? cur : '')}">`;
+  }).join('');
+}
+
+/* Reads renderCustomFieldInputs()'s inputs back into a flat changes object
+   ready for an updateX() setFm() loop (or fm() at creation). `orig` is the
+   note's existing custom:{} object, used only to tell "never set, stays
+   blank" (write '', a no-op through setFm() -- same convention due_days
+   relies on) from "was set, now cleared" (write the literal string '""',
+   which setFm() treats as a real value and patches through -- see
+   build_summary.py's custom_of(), which treats a quoted-empty value the
+   same as absent, so a cleared field still doesn't show up in custom{}). */
+function readCustomFieldValues(type, idPrefix, orig){
+  const defs = (CUSTOM_FIELDS && CUSTOM_FIELDS[type]) || [];
+  const o = orig || {};
+  const out = {};
+  defs.forEach(f => {
+    const id = `${idPrefix}_cf_${f.key}`;
+    if(f.type === 'toggle'){
+      const btn = document.getElementById(id);
+      out[f.key] = btn ? btn.classList.contains('on') : false;
+      return;
+    }
+    let v = f.type === 'select' ? (picked(id) || '') : val(id);
+    if(v === '' && o[f.key] !== undefined && o[f.key] !== '') v = '""';
+    out[f.key] = v;
+  });
+  return out;
+}
+
+function renderCustomFieldsSection(){
+  return `<div id="customfields-body">${renderCustomFieldsCards()}</div>`;
+}
+
+function renderCustomFieldsCards(){
+  if(!CUSTOM_FIELDS) return `<div class="card"><span class="sub">Loading…</span></div>`;
+  return CUSTOM_FIELD_TYPES.map(type => {
+    const defs = CUSTOM_FIELDS[type] || [];
+    let h = `<div class="card" style="margin-bottom:10px">
+      <b>${esc(CUSTOM_FIELD_TYPE_LABELS[type])}</b>`;
+    h += defs.length
+      ? `<div class="list" style="margin-top:8px">` + defs.map((f, i) => `<div class="item">
+          <div style="flex:1;min-width:0">
+            <div class="m">${esc(f.label || f.key)}</div>
+            <div class="s">${esc(f.key)} · ${esc(CUSTOM_FIELD_INPUT_LABELS[f.type] || f.type)}${
+              f.type === 'select' && (f.options||[]).length ? ': ' + esc((f.options||[]).join(', ')) : ''}</div>
+          </div>
+          <button class="btn sec" style="width:auto;padding:6px 12px;flex-shrink:0"
+            onclick="removeCustomField('${type}', ${i})">Remove</button>
+        </div>`).join('') + `</div>`
+      : `<p class="sub" style="margin-top:6px">No custom fields defined yet.</p>`;
+    h += `<p class="sub" style="margin-top:12px">Add a field</p>
+      <input id="cfnew_${type}_key" placeholder="key (e.g. mood_tag)" autocapitalize="off" autocorrect="off">
+      <input id="cfnew_${type}_label" placeholder="Label shown on the sheet" style="margin-top:6px" autocapitalize="words">
+      <div class="chips" style="margin-top:6px">${CUSTOM_FIELD_INPUT_TYPES.map(t => `<button type="button"
+        class="chip ${(CF_NEW_TYPE[type]||'text')===t?'on':''}" onclick="setCustomFieldNewType('${type}','${t}')"
+        >${esc(CUSTOM_FIELD_INPUT_LABELS[t])}</button>`).join('')}</div>
+      ${(CF_NEW_TYPE[type]||'text') === 'select' ? `<input id="cfnew_${type}_options"
+        placeholder="Choices, comma-separated" style="margin-top:6px" autocapitalize="off">` : ''}
+      <button class="btn sec" style="margin-top:8px" onclick="submitAddCustomField('${type}')">Add field</button>
+    </div>`;
+    return h;
+  }).join('') + `<p class="sub" style="margin-top:4px">Every field appears on its type's edit sheet as its
+    own input, and shows up in that note's frontmatter in Obsidian and in summary.json's custom object
+    once it's set on a real note. Removing a field here stops it from being editable or summarized — it
+    doesn't erase the value from notes that already have it.</p>`;
+}
+
+// Which input type the "Add a field" mini-form is currently set to, per
+// note type -- transient UI state, not part of CUSTOM_FIELDS itself, so
+// picking a type doesn't touch the committed file until Add is tapped.
+let CF_NEW_TYPE = {};
+function setCustomFieldNewType(type, t){ CF_NEW_TYPE[type] = t; renderSettingsCustomFieldsCard(); }
+
+// Re-renders just this section in place rather than the whole Settings
+// view, so switching the add-form's type chip doesn't fight focus/scroll
+// the way a full render() would if something else on the page has a live
+// input mid-edit.
+function renderSettingsCustomFieldsCard(){
+  const el = document.getElementById('customfields-body');
+  if(el) el.innerHTML = renderCustomFieldsCards();
+}
+
+async function submitAddCustomField(type){
+  const key = (val(`cfnew_${type}_key`) || '').trim().toLowerCase();
+  const err = customFieldKeyError(type, key);
+  if(err) return toast(err);
+  const label = (val(`cfnew_${type}_label`) || '').trim() || key;
+  const inputType = CF_NEW_TYPE[type] || 'text';
+  const options = inputType === 'select'
+    ? (val(`cfnew_${type}_options`) || '').split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+  if(inputType === 'select' && !options.length) return toast('Add at least one choice');
+  // Built and saved first, only assigned to the live CUSTOM_FIELDS on
+  // success -- same order every other submit*() in this file uses (write,
+  // then mutate local state), so a failed save can't leave the in-memory
+  // list showing a field that was never actually persisted.
+  const next = { ...CUSTOM_FIELDS, [type]: [...(CUSTOM_FIELDS[type] || []), { key, label, type: inputType, options }] };
+  try {
+    await saveCustomFields(next);
+    CUSTOM_FIELDS = next;
+    CF_NEW_TYPE[type] = 'text';
+    render();
+    toast(`Added "${label}"`);
+  } catch(e){ toast('Failed: ' + e.message); }
+}
+
+async function removeCustomField(type, i){
+  const removed = (CUSTOM_FIELDS[type] || [])[i];
+  if(!removed) return;
+  const next = { ...CUSTOM_FIELDS, [type]: CUSTOM_FIELDS[type].filter((_, idx) => idx !== i) };
+  try {
+    await saveCustomFields(next);
+    CUSTOM_FIELDS = next;
+    render();
+    toast(`Removed "${removed.label || removed.key}"`);
+  } catch(e){ toast('Failed: ' + e.message); }
+}
+
 function formatBytes(n){
   if(!n) return '0 B';
   if(n < 1024) return n + ' B';
@@ -2670,9 +2897,10 @@ function transactionRow(t, showAccount){
   </div>`;
 }
 
-function sheetEditTransaction(i){
+async function sheetEditTransaction(i){
   const t = TXNREFS[i];
   if(!t) return toast('Not found');
+  await loadCustomFieldsIfNeeded();
   openSheet(`<h1 style="font-size:22px">${esc(t.merchant)}</h1>
     <p class="sub">${esc(t.date)} · ${t.direction==='income'?'received':'spent'} ${esc(money(t.amount))}
     — to change the amount, merchant, account, or date, edit the note directly in Obsidian.</p>
@@ -2684,6 +2912,7 @@ function sheetEditTransaction(i){
       <button class="tick ${t.exempt?'on':''}" style="width:44px;height:28px;border-radius:14px;flex-shrink:0"
         onclick="toggleOnOffBtn(this)" id="et_exempt">${t.exempt?'On':'Off'}</button>
     </div>
+    ${renderCustomFieldInputs('transaction', t.custom, 'et')}
     <button class="btn" style="margin-top:18px" onclick="submitEditTransaction(this, ${i})">Save</button>
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
 }
@@ -2694,11 +2923,13 @@ async function submitEditTransaction(btn, i){
   const category = picked('et_cat') || t.category;
   const exemptBtn = document.getElementById('et_exempt');
   const exempt = exemptBtn ? exemptBtn.classList.contains('on') : t.exempt;
+  const custom = readCustomFieldValues('transaction', 'et', t.custom);
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    const r = await updateTransaction(t, { category, exempt });
+    const r = await updateTransaction(t, { category, exempt, ...custom });
     bump(d => { const x = (d.money.recent||[]).find(y => y.path === t.path);
-      if(x){ x.category = category; x.exempt = exempt; } });
+      if(x){ x.category = category; x.exempt = exempt;
+        x.custom = Object.fromEntries(Object.entries(custom).filter(([, v]) => v !== '' && v !== '""')); } });
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device' : `${t.merchant} updated`);
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
@@ -2860,6 +3091,7 @@ function viewLife(){
 function viewSettings(){
   const c = cfg();
   ensureReminderConfig();
+  ensureCustomFields();
   return header('Settings','Everything is stored on this device only') +
   collapsible('connection', 'Connection', `
   <div class="card">
@@ -2921,6 +3153,8 @@ function viewSettings(){
   </div>`) +
 
   collapsible('schedule', 'Schedule', renderScheduleSection()) +
+
+  collapsible('customfields', 'Custom fields', renderCustomFieldsSection()) +
 
   collapsible('privacy', 'Privacy', `
   <div class="card">
@@ -3528,7 +3762,7 @@ let GOAL_DRAFT = null;
 // due_occurrence() understands for a goal.
 const GOAL_RECURS = ['', 'daily', 'weekly', 'monthly'];
 
-function sheetEditGoal(i){
+async function sheetEditGoal(i){
   const g = GOALREFS[i];
   if(!g) return toast('Goal not found');
   GOAL_DRAFT = { path:g.path, name:g.name, domain:g.domain, status:g.status,
@@ -3536,7 +3770,9 @@ function sheetEditGoal(i){
     due_recur: g.due_recur || '', due_day: g.due_day != null ? String(g.due_day) : '',
     due_weekday: g.due_weekday != null ? String(g.due_weekday) : '',
     due_days: (g.due_days || []).map(String),
-    due_time: g.due_time || '', notifications: parseNotifications(g.notifications) };
+    due_time: g.due_time || '', notifications: parseNotifications(g.notifications),
+    custom: g.custom || {} };
+  await loadCustomFieldsIfNeeded();
   renderGoalEditSheet();
 }
 
@@ -3591,6 +3827,7 @@ function renderGoalEditSheet(){
       <h2 style="margin-top:22px">Notifications</h2>
       ${notifRowsHtml()}
     ` : ''}
+    ${renderCustomFieldInputs('goal', d.custom, 'eg')}
     <button class="btn" style="margin-top:18px" onclick="submitEditGoal(this)">Save</button>
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
 }
@@ -3610,6 +3847,7 @@ async function submitEditGoal(btn){
   const domain = picked('eg_domain'), status = picked('eg_status');
   const metric = val('eg_metric'), unit = val('eg_unit'), target_date = val('eg_target_date');
   const dueDays = d.due_recur === 'daily' ? pickedMulti('eg_days') : [];
+  const custom = readCustomFieldValues('goal', 'eg', d.custom);
   try {
     const r = await updateGoal({path:d.path, name:d.name}, {
       domain, status, metric, unit, target_value: target, target_date,
@@ -3619,22 +3857,26 @@ async function submitEditGoal(btn){
       due_days: `[${dueDays.join(', ')}]`,
       due_time: d.due_recur ? d.due_time : '',
       notifications: `[${(d.due_recur ? d.notifications : []).map(formatNotificationToken).join(', ')}]`,
+      ...custom,
     });
     bump(dd => { const x = (dd.life.goals||[]).find(y => y.path === d.path);
       if(x){ x.domain = domain; x.status = status; x.metric = metric; x.unit = unit; x.target_date = target_date;
         x.due_recur = d.due_recur; x.due_days = dueDays.map(Number);
+        x.custom = Object.fromEntries(Object.entries(custom).filter(([, v]) => v !== '' && v !== '""'));
         if(target){ x.target = parseFloat(target); x.percent = x.target ? +(x.current/x.target*100).toFixed(1) : null; } } });
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device' : `${d.name} updated`);
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
 }
 
-function sheetAddAchievement(){
+async function sheetAddAchievement(){
+  await loadCustomFieldsIfNeeded();
   openSheet(`<h1 style="font-size:22px">Add an achievement</h1>
     <label>Title</label><input id="ach_title" placeholder="First 10k run" autocapitalize="sentences">
     <label>Domain</label>${chipRow('ach_domain', GOAL_DOMAINS, 'life')}
     <label>Date</label><input id="ach_date" type="date" value="${todayISO()}">
     <label>Note (optional)</label><textarea id="ach_note" placeholder="What happened, what it took."></textarea>
+    ${renderCustomFieldInputs('achievement', {}, 'ach')}
     <button class="btn" style="margin-top:18px" onclick="submitAddAchievement(this)">Save</button>
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
 }
@@ -3644,22 +3886,25 @@ async function submitAddAchievement(btn){
   if(!title) return toast('Give it a title');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
+    const custom = readCustomFieldValues('achievement', 'ach', {});
     const r = await saveAchievement({ title, domain: picked('ach_domain') || 'life',
-      date: val('ach_date') || todayISO(), note: val('ach_note') });
+      date: val('ach_date') || todayISO(), note: val('ach_note'), custom });
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device — will upload when online' : 'Achievement added');
     setTimeout(() => refresh(true), 1500);
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
 }
 
-function sheetEditAchievement(i){
+async function sheetEditAchievement(i){
   const a = ACHIEVEMENTREFS[i];
   if(!a) return toast('Not found');
+  await loadCustomFieldsIfNeeded();
   openSheet(`<h1 style="font-size:22px">${esc(a.name)}</h1>
     <p class="sub">To rename it or edit its note, edit the note directly in Obsidian — domain and date
     are fair game here.</p>
     <label>Domain</label>${chipRow('eac_domain', GOAL_DOMAINS, a.domain)}
     <label>Date</label><input id="eac_date" type="date" value="${esc(a.date)}">
+    ${renderCustomFieldInputs('achievement', a.custom, 'eac')}
     <button class="btn" style="margin-top:18px" onclick="submitEditAchievement(this, ${i})">Save</button>
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
     <button class="btn danger" style="margin-top:8px" onclick="submitDeleteAchievement(${i})">Delete</button>`);
@@ -3670,9 +3915,11 @@ async function submitEditAchievement(btn, i){
   if(!a) return toast('Not found');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    const r = await updateAchievement(a, { domain: picked('eac_domain'), date: val('eac_date') });
+    const custom = readCustomFieldValues('achievement', 'eac', a.custom);
+    const r = await updateAchievement(a, { domain: picked('eac_domain'), date: val('eac_date'), ...custom });
     bump(d => { const x = (d.life.achievements||[]).find(y => y.path === a.path);
-      if(x){ x.domain = picked('eac_domain'); x.date = val('eac_date'); } });
+      if(x){ x.domain = picked('eac_domain'); x.date = val('eac_date');
+        x.custom = Object.fromEntries(Object.entries(custom).filter(([, v]) => v !== '' && v !== '""')); } });
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device' : `${a.name} updated`);
   } catch(e){ toast('Failed: ' + e.message); btn.disabled = false; btn.textContent = 'Save'; }
@@ -3705,7 +3952,7 @@ let CHORE_DRAFT = null;
 function blankChoreDraft(recur){
   return { path:'', origRecur:false, text:'', category:'home', due_recur: recur || '',
     due_date: todayISO(), due_day:'', due_weekday:'', due_every_days:'', due_days:[],
-    times_per_period:'1', area:'', pet:'', due_time:'', notifications:[] };
+    times_per_period:'1', area:'', pet:'', due_time:'', notifications:[], custom:{} };
 }
 
 // c is either a CHOREREFS entry (recurring, carries .name) or a
@@ -3730,30 +3977,34 @@ function choreToDraft(c){
     times_per_period: c.times_per_period != null ? String(c.times_per_period) : '1',
     area: c.area || '', pet: c.pet || '', due_time: c.due_time || '',
     notifications: parseNotifications(c.notifications),
+    custom: c.custom || {},
   };
 }
 
-function sheetAddChore(recur){
+async function sheetAddChore(recur){
   CHORE_DRAFT = blankChoreDraft(recur);
+  await loadCustomFieldsIfNeeded();
   renderChoreSheet();
 }
 
 // Recurring chores, reached from the Chores tab (CHOREREFS, same ref-array
 // pattern as every other list-by-index sheet in this file).
-function sheetEditChore(i){
+async function sheetEditChore(i){
   const c = CHOREREFS[i];
   if(!c) return toast('Chore not found');
   CHORE_DRAFT = choreToDraft(c);
+  await loadCustomFieldsIfNeeded();
   renderChoreSheet();
 }
 
 // Tasks (chores with due_recur blank), reached from the Chores tab's
 // Tasks/Completed lists — looked up by id rather than a separate ref
 // array, since chores.tasks/tasks_done already are one.
-function sheetEditDueChore(id){
+async function sheetEditDueChore(id){
   const t = findTaskById(id);
   if(!t) return toast('Not found');
   CHORE_DRAFT = choreToDraft(t);
+  await loadCustomFieldsIfNeeded();
   renderChoreSheet();
 }
 
@@ -3827,6 +4078,7 @@ function renderChoreSheet(){
     grid. "Before due" notifications need this set, "At a time of day" notifications don't.</p>
     <h2 style="margin-top:22px">Notifications</h2>
     ${notifRowsHtml()}
+    ${renderCustomFieldInputs('chore', d.custom, 'ch')}
     <button class="btn" style="margin-top:18px" onclick="submitChore(this)">Save</button>
     <button class="btn sec" style="margin-top:8px" onclick="closeSheet()">Cancel</button>
     ${d.path && d.origRecur ? `<button class="btn danger" style="margin-top:8px" onclick="submitRemoveChoreDraft()">Remove chore</button>` : ''}
@@ -3841,7 +4093,7 @@ function renderChoreSheet(){
 // forever once you'd cleared every day chip back off; '[]' isn't empty, so
 // it patches through and parses back to no mask, same as never having set
 // one (see build_summary.py's mask_of()).
-function choreChanges(d, category, dueDays){
+function choreChanges(d, category, dueDays, custom){
   const changes = {
     category,
     due_recur: d.due_recur,
@@ -3853,6 +4105,7 @@ function choreChanges(d, category, dueDays){
     times_per_period: d.due_recur ? (d.times_per_period || 1) : '',
     area: d.area, pet: d.pet, due_time: d.due_time,
     notifications: `[${(d.notifications||[]).map(formatNotificationToken).join(', ')}]`,
+    ...(custom || {}),
   };
   if(!d.origRecur) changes.text = d.text;
   return changes;
@@ -3883,12 +4136,13 @@ async function submitChore(btn){
   // this due_recur, which is exactly "no mask" for that case anyway.
   const category = picked('ch_cat') || 'home';
   const dueDays = pickedMulti('ch_days');
+  const custom = readCustomFieldValues('chore', 'ch', d.custom);
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
     const r = d.path
-      ? await updateChore({path:d.path, name:text}, choreChanges(d, category, dueDays))
-      : await saveChore({...d, name: text, category, due_days: dueDays});
-    bumpChoreDraft(d, text, category, dueDays);
+      ? await updateChore({path:d.path, name:text}, choreChanges(d, category, dueDays, custom))
+      : await saveChore({...d, name: text, category, due_days: dueDays, custom});
+    bumpChoreDraft(d, text, category, dueDays, custom);
     closeSheet(); render();
     toast(r === 'queued' ? 'Saved on device — will upload when online' : (d.path ? `${text} updated` : `Added ${text}`));
     setTimeout(() => refresh(true), 1500);
