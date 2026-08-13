@@ -12,13 +12,19 @@
 <title>LifeOS</title>
 <style>
 :root{
-  --bg:#000000; --panel:#141414; --panel2:#1e1e1e; --line:#2c2c2c;
+  --bg:#000000; --panel:#161616; --panel2:#202020; --line:rgba(255,255,255,.06);
   --text:#f2f2f2; --dim:#9a9a9a; --accent:#ff8a3d; --ink:#1a0f05; --good:#3fb950;
-  --warn:#d29922; --bad:#f85149; --radius:14px;
+  --warn:#d29922; --bad:#f85149; --radius:18px;
   --warn-bg:rgba(210,153,34,.1); --warn-line:rgba(210,153,34,.35); --warn-text:#f0c674;
   --on-bad:#ffffff; --on-accent:var(--ink);
   --nav-bg:rgba(0,0,0,.93); --scrim:rgba(0,0,0,.6); --scrim-strong:rgba(0,0,0,.55);
   --accent-glow:rgba(255,138,61,.45);
+  /* Soft accent-tinted shadow/fill, reused for the primary button glow and
+     the quick-action icon chips below -- color-mix so it stays in sync
+     with --accent instead of a second hardcoded rgba (same reasoning as
+     the calendar heat classes' color-mix usage further down). */
+  --accent-glow-soft:color-mix(in srgb, var(--accent) 20%, transparent);
+  --accent-tint:color-mix(in srgb, var(--accent) 10%, transparent);
   --safe-top:env(safe-area-inset-top); --safe-bot:env(safe-area-inset-bottom);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -72,12 +78,22 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);
 .muted{color:var(--dim)}
 .good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
-.btn{background:var(--accent);color:var(--ink);font-weight:650;border-radius:12px;padding:14px;width:100%;font-size:16px}
-.btn.sec{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
-.btn.danger{background:transparent;color:var(--bad);border:1px solid var(--line)}
+.btn{background:var(--accent);color:var(--ink);font-weight:650;border-radius:var(--radius);padding:14px;width:100%;
+  font-size:16px;box-shadow:0 6px 22px var(--accent-glow-soft)}
+.btn.sec{background:var(--panel2);color:var(--text);border:1px solid var(--line);box-shadow:none}
+.btn.danger{background:transparent;color:var(--bad);border:1px solid var(--line);box-shadow:none}
 .btn:active{opacity:.7}
 .quick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
-.quick button{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 12px;text-align:left}
+.quick button{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 12px;
+  text-align:left;box-shadow:0 10px 22px -16px rgba(0,0,0,.8)}
+/* Icon chip wrapper for the Today tab's four quick-action tiles -- an
+   accent-tinted rounded square behind the icon, replacing the old plain
+   emoji span. Only these four tiles + the nav bar (below) got icons
+   redrawn as SVG; every other icon in the app (achievements, milestones,
+   category glyphs, etc.) is unchanged on purpose -- see CLAUDE.md's note
+   on this pass's scope. */
+.quick .icon-chip{width:34px;height:34px;border-radius:10px;background:var(--accent-tint);
+  box-shadow:0 0 12px var(--accent-glow-soft);display:flex;align-items:center;justify-content:center;margin-bottom:8px}
 .quick .e{font-size:20px;display:block;margin-bottom:6px}
 .quick .t{font-weight:600;font-size:15px;display:block}
 .quick .d{font-size:12px;color:var(--dim);display:block;margin-top:2px}
@@ -96,7 +112,12 @@ nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--nav-bg)
 nav button{flex:1;padding:9px 0 7px;font-size:10px;color:var(--dim);display:flex;flex-direction:column;
   align-items:center;gap:3px}
 nav button.on{color:var(--accent)}
-nav .i{font-size:18px;line-height:1}
+/* font-size still sizes the one remaining emoji icon (Today's badge, see
+   below); the six SVG icons size themselves via their own width/height
+   attributes and just need centering here, which this rule already gives
+   every other .i (nav button's own align-items:center) -- svg is inline
+   by default, so this keeps it from sitting off the emoji's baseline. */
+nav .i{font-size:18px;line-height:1;display:inline-flex}
 /* the center tab (Today) sits raised above the bar in its own accent badge,
    so it reads as the app's anchor point rather than one option among seven */
 nav button.center{font-weight:700;color:var(--text)}
@@ -206,14 +227,20 @@ textarea{min-height:88px;resize:vertical}
 <div id="pull"><span class="ring"></span></div>
 <div id="app"></div>
 
+<!-- Icons below use stroke/fill="currentColor" so the existing .on class
+     (color:var(--accent) vs var(--dim), toggled by render()'s own
+     dataset.v check further down -- unchanged) still drives their color
+     with no added JS. data-v identifiers and the "Today" icon (kept as the
+     ☀️ emoji, not the maple-leaf SVG from the source design) are untouched
+     -- only the other six icons and the Life/Money labels changed. -->
 <nav id="nav">
-  <button data-v="calendar"><span class="i">📅</span>Calendar</button>
-  <button data-v="life"><span class="i">🎯</span>Life</button>
-  <button data-v="money"><span class="i">💵</span>Money</button>
+  <button data-v="calendar"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3.5" y="5.5" width="17" height="15" rx="3"></rect><line x1="3.5" y1="10" x2="20.5" y2="10"></line><line x1="8" y1="3" x2="8" y2="6.5"></line><line x1="16" y1="3" x2="16" y2="6.5"></line></svg></span>Calendar</button>
+  <button data-v="life"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="3"></rect><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="12" x2="12" y2="9"></line></svg></span>Vault</button>
+  <button data-v="money"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,17 9,12 13,14.5 20,5"></polyline><polyline points="14.5,5 20,5 20,10.5"></polyline></svg></span>Finance</button>
   <button data-v="today" class="center on"><span class="badge"><span class="i">☀️</span></span>Today</button>
-  <button data-v="chores"><span class="i">🧹</span>Chores</button>
-  <button data-v="fitness"><span class="i">🏃</span>Fitness</button>
-  <button data-v="settings"><span class="i">⚙️</span>Settings</button>
+  <button data-v="chores"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="3.5"></rect><line x1="7.5" y1="9" x2="16.5" y2="9"></line><line x1="7.5" y1="13" x2="14" y2="13"></line><line x1="7.5" y1="17" x2="12" y2="17"></line></svg></span>Chores</button>
+  <button data-v="fitness"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="3,13 8,13 10,7 14,19 16,13 21,13"></polyline></svg></span>Fitness</button>
+  <button data-v="settings"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="6" stroke-width="2"></circle><circle cx="12" cy="12" r="2.2" stroke-width="2"></circle><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(0 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(45 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(90 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(135 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(180 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(225 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(270 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(315 12 12)" fill="currentColor" stroke="none"></rect></svg></span>Settings</button>
 </nav>
 
 <div class="sheet" id="sheet"><div id="sheetBody"></div></div>
@@ -3001,10 +3028,10 @@ function viewToday(){
   h += choresStrip();
   h += dueStrip();
   h += `<div class="quick">
-    <button onclick="sheetExpense()"><span class="e">💵</span><span class="t">Log expense</span><span class="d">Tap, type, done</span></button>
-    <button onclick="sheetWorkout()"><span class="e">🏃</span><span class="t">Log workout</span><span class="d">Activity + minutes</span></button>
-    <button onclick="sheetCheckin()"><span class="e">📝</span><span class="t">Check in</span><span class="d">Mood, sleep, journal</span></button>
-    <button onclick="sheetMetrics()"><span class="e">⚖️</span><span class="t">Body metrics</span><span class="d">Weight, HR, waist</span></button>
+    <button onclick="sheetExpense()"><span class="icon-chip"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8"></circle><line x1="12" y1="7.5" x2="12" y2="16.5"></line></svg></span><span class="t">Log expense</span><span class="d">Tap, type, done</span></button>
+    <button onclick="sheetWorkout()"><span class="icon-chip"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"><polyline points="3,13 8,13 10,7 14,19 16,13 21,13"></polyline></svg></span><span class="t">Log workout</span><span class="d">Activity + minutes</span></button>
+    <button onclick="sheetCheckin()"><span class="icon-chip"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"><line x1="6" y1="18" x2="15" y2="9"></line><rect x="14.2" y="7.2" width="3.2" height="3.2" rx="0.6" transform="rotate(45 15.8 8.8)"></rect></svg></span><span class="t">Check in</span><span class="d">Mood, sleep, journal</span></button>
+    <button onclick="sheetMetrics()"><span class="icon-chip"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="12" x2="20" y2="12"></line><circle cx="6" cy="12" r="2.2"></circle><circle cx="18" cy="12" r="2.2"></circle></svg></span><span class="t">Body metrics</span><span class="d">Weight, HR, waist</span></button>
   </div>`;
   if(!d) return h + `<div class="empty">No data yet. Pull down or tap refresh in Settings.</div>`;
   h += `<div class="grid">
