@@ -125,7 +125,14 @@ nav button.center.on{color:var(--accent)}
 nav button.center .badge{width:44px;height:44px;border-radius:50%;background:var(--accent);
   display:flex;align-items:center;justify-content:center;margin-top:-20px;
   box-shadow:0 4px 14px var(--accent-glow);border:3px solid var(--bg)}
-nav button.center .badge .i{font-size:20px;line-height:1;color:var(--ink)}
+/* The app's actual icon file (icon-192.png -- same asset as the home-screen
+   icon and manifest, not a redrawn approximation) fills the badge circle.
+   It's an opaque square (solid black background behind the leaf, no alpha
+   -- confirmed, not just rendering as black), so it needs its own
+   border-radius+object-fit to come out circular; --accent behind it in
+   .badge above is now moot (fully covered) but left alone since it's
+   harmless and this is the one badge instance, not a reusable pattern. */
+.logo-badge{width:44px;height:44px;border-radius:50%;object-fit:cover;display:block}
 .sheet{position:fixed;inset:0;background:var(--scrim);z-index:100;display:none;align-items:flex-end}
 .sheet.on{display:flex}
 .sheet>div{background:var(--bg);width:100%;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;
@@ -237,7 +244,7 @@ textarea{min-height:88px;resize:vertical}
   <button data-v="calendar"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3.5" y="5.5" width="17" height="15" rx="3"></rect><line x1="3.5" y1="10" x2="20.5" y2="10"></line><line x1="8" y1="3" x2="8" y2="6.5"></line><line x1="16" y1="3" x2="16" y2="6.5"></line></svg></span>Calendar</button>
   <button data-v="life"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="3"></rect><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="12" x2="12" y2="9"></line></svg></span>Vault</button>
   <button data-v="money"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,17 9,12 13,14.5 20,5"></polyline><polyline points="14.5,5 20,5 20,10.5"></polyline></svg></span>Finance</button>
-  <button data-v="today" class="center on"><span class="badge"><span class="i">☀️</span></span>Today</button>
+  <button data-v="today" class="center on"><span class="badge"><img class="logo-badge" src="icon-192.png" alt=""></span>Today</button>
   <button data-v="chores"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="3.5"></rect><line x1="7.5" y1="9" x2="16.5" y2="9"></line><line x1="7.5" y1="13" x2="14" y2="13"></line><line x1="7.5" y1="17" x2="12" y2="17"></line></svg></span>Chores</button>
   <button data-v="fitness"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="3,13 8,13 10,7 14,19 16,13 21,13"></polyline></svg></span>Fitness</button>
   <button data-v="settings"><span class="i"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="6" stroke-width="2"></circle><circle cx="12" cy="12" r="2.2" stroke-width="2"></circle><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(0 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(45 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(90 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(135 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(180 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(225 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(270 12 12)" fill="currentColor" stroke="none"></rect><rect x="10.2" y="1.6" width="3.6" height="3.4" rx="1" transform="rotate(315 12 12)" fill="currentColor" stroke="none"></rect></svg></span>Settings</button>
